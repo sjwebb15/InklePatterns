@@ -6,6 +6,13 @@ straps and trim. You set up the warp threads, color them, add pick-up
 threads, and see a preview of the woven band. You can also preview a section
 of the pattern repeated down the length of the band.
 
+There are two versions, and they work the same way:
+  - A Windows program (InklePatterns.exe).
+  - A web version that runs in any modern browser, with nothing to install:
+    https://sjwebb15.github.io/InklePatterns/
+Pattern files (.inkl) made in one open in the other. This manual describes
+both. Section 15 lists the few differences in the web version.
+
 
 CONTENTS
 --------
@@ -23,11 +30,14 @@ CONTENTS
  12. Saving and opening patterns
  13. Quick reference
  14. Things to be aware of
+ 15. The web version
 
 
 1. STARTING THE PROGRAM
 -----------------------
-Double-click InklePatterns.exe. It is a single file, so nothing needs to be
+Web version: open https://sjwebb15.github.io/InklePatterns/ in your browser.
+
+Windows program: double-click InklePatterns.exe. It is a single file, so nothing needs to be
 installed. It may take a few seconds to open.
 
 The first time you run it, Windows may show a blue "Windows protected your
@@ -320,3 +330,43 @@ Keyboard
     undone.
   - Generate always starts a blank pattern, even if the thread count hasn't
     changed. You can undo it with Ctrl+Z.
+
+
+15. THE WEB VERSION
+-------------------
+The web version has the same controls as the Windows program, with these
+differences:
+
+Saving and opening
+  - In Chrome and Edge, Save and Open work like a desktop program: you
+    choose where the file goes, and Save updates the same file afterwards.
+    The browser may ask once for permission to save changes to the file.
+  - In other browsers (Firefox, Safari), Save downloads the pattern as a
+    .inkl file, normally into your Downloads folder. Save As asks for a
+    file name first.
+  - You can also open a pattern by dragging a .inkl file onto the page.
+
+Unsaved changes
+  - Unlike the Windows program, the web version warns you if you try to
+    close or reload the page with unsaved changes.
+
+Preset colors
+  - Your palette is saved in your browser, so it stays on that computer and
+    browser. Clearing your browser's site data resets it.
+  - The Reset button in the Preset colors box restores the original
+    palette.
+
+Repeat preview
+  - Opens as a large panel on top of the page rather than a separate
+    window. Close it with the Close button or the Esc key. Only one can be
+    open at a time.
+
+Tablets and touch screens
+  - Tick "Eraser (left-click erases)" in the Tool box to erase with a tap
+    or a plain click, since there's no right-click.
+  - To remove a pick-up on a touch screen, tick Eraser while using the
+    Pick-up tool.
+
+Small screens
+  - In a narrow window (such as a phone), the tool boxes sit above the
+    preview and the page scrolls.

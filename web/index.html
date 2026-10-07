@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Inkle Pattern Generator</title>
+<meta name="description" content="Design inkle weaving patterns: warping grid, woven-band preview, pick-ups and repeats.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="topbar">
+  <h1>Inkle Pattern Generator</h1>
+  <span id="fileName" class="filename"></span>
+  <nav class="filebtns">
+    <button id="openBtn" title="Open a .inkl pattern (Ctrl+O)">Open&hellip;</button>
+    <button id="saveBtn" title="Save (Ctrl+S)">Save</button>
+    <button id="saveAsBtn" title="Save to a new file (Ctrl+Shift+S)">Save As&hellip;</button>
+    <a class="help" href="https://github.com/sjwebb15/InklePatterns/blob/main/README.txt" target="_blank" rel="noopener">Help</a>
+  </nav>
+  <input type="file" id="fileInput" accept=".inkl" hidden>
+</header>
+
+<div id="gridWrap"><canvas id="gridCanvas" aria-label="H/U warping grid"></canvas></div>
+
+<main>
+  <div id="toolsPane">
+    <div id="tools">
+      <section class="box">
+        <h2>Warp threads</h2>
+        <div class="row">
+          <input id="count" type="number" min="1" max="200" value="15" aria-label="Number of warp threads">
+          <button id="generateBtn" class="accent">Generate</button>
+        </div>
+      </section>
+
+      <section class="box">
+        <h2>Preview zoom</h2>
+        <div class="row">
+          <button id="zoomOut" class="sq" title="Zoom out">&minus;</button>
+          <input id="zoom" type="range" min="2" max="20" step="1" value="4" aria-label="Zoom">
+          <button id="zoomIn" class="sq" title="Zoom in">+</button>
+        </div>
+        <label class="check"><input type="checkbox" id="rotate"> Rotate 90&deg;</label>
+      </section>
+
+      <section class="box">
+        <h2>Tool</h2>
+        <label class="check"><input type="radio" name="mode" value="color" checked> Color thread</label>
+        <label class="check"><input type="radio" name="mode" value="pickup"> Pick-up</label>
+        <label class="check"><input type="radio" name="mode" value="range"> Select repeat rows</label>
+        <label class="check eraser"><input type="checkbox" id="eraser"> Eraser (left-click erases)</label>
+        <div class="row undo-row">
+          <button id="undoBtn" title="Undo (Ctrl+Z)">&#8630; Undo</button>
+          <button id="redoBtn" title="Redo (Ctrl+Y)">Redo &#8631;</button>
+        </div>
+        <p class="hint">Shift+click = pick-up. Right-click<br>erases (or resets range).</p>
+      </section>
+
+      <section class="box">
+        <h2>Preset colors</h2>
+        <div id="palette"></div>
+        <div class="row gap-top">
+          <button id="addPreset">Add current color</button>
+          <button id="resetPresets" title="Restore the original palette">Reset</button>
+        </div>
+        <p class="hint">Right-click a swatch to replace it.</p>
+      </section>
+
+      <section class="box">
+        <h2>Custom color</h2>
+        <div class="row slider-row"><label for="sR">R</label><input id="sR" type="range" min="0" max="255"><span class="val" id="vR"></span></div>
+        <div class="row slider-row"><label for="sG">G</label><input id="sG" type="range" min="0" max="255"><span class="val" id="vG"></span></div>
+        <div class="row slider-row"><label for="sB">B</label><input id="sB" type="range" min="0" max="255"><span class="val" id="vB"></span></div>
+        <div class="row gap-top"><div id="curSwatch"></div><span id="curHex" class="hex"></span></div>
+      </section>
+
+      <section class="box">
+        <h2>Repeat preview</h2>
+        <div class="row">
+          <span>Rows</span>
+          <input id="rangeStart" type="number" min="0" value="0" aria-label="First row">
+          <span>to</span>
+          <input id="rangeEnd" type="number" min="0" value="0" aria-label="Last row">
+          <button id="rangeSet">Set</button>
+        </div>
+        <div class="row gap-top"><button id="fullRange">Use full range</button></div>
+        <div class="row gap-top">
+          <span>Repeats</span>
+          <input id="repeats" type="number" min="1" max="200" value="4" aria-label="Number of repeats">
+          <button id="openRepeat">Open</button>
+        </div>
+        <p class="hint">Dashed box in preview = selected rows.</p>
+      </section>
+    </div>
+  </div>
+  <div id="previewPane" aria-label="Pattern preview"></div>
+</main>
+
+<dialog id="repeatDlg">
+  <div class="dlgbar">
+    <strong>Repeated preview</strong>
+    <span class="row">Repeats
+      <input id="rCount" type="number" min="1" max="200" aria-label="Number of repeats">
+      <button id="rUpdate">Update</button>
+    </span>
+    <span class="row">Zoom
+      <button id="rZoomOut" class="sq" title="Zoom out">&minus;</button>
+      <input id="rZoom" type="range" min="2" max="20" step="1" aria-label="Zoom">
+      <button id="rZoomIn" class="sq" title="Zoom in">+</button>
+    </span>
+    <label class="check"><input type="checkbox" id="rRotate"> Rotate 90&deg;</label>
+    <button id="rClose" class="close">Close</button>
+  </div>
+  <div id="repeatPane"></div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>

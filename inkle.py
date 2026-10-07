@@ -721,7 +721,7 @@ class InkleApp(tk.Tk):
 
     def _on_pickup(self, x, y, erase, press):
         cell = self.cell_at(x, y)
-        if cell is None:
+        if cell is None or cell[1] < 2:  # rows 0-1 have no hexagon two rows above to reach
             return
         if press:  # a drag applies the state chosen by the first cell pressed
             self._pick_target = cell not in self.pickups
