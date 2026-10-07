@@ -1,0 +1,10 @@
+# build output (the exe is published as a GitHub Release, not committed)
+dist/
+build/
+*.spec
+__pycache__/
+
+# Claude Code settings and private project notes (kept out of the public repo)
+.claude/
+CLAUDE.md
+CLAUDE.local.md
