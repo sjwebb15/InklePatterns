@@ -568,6 +568,8 @@ class InkleApp(tk.Tk):
     def _on_turn_click(self, event, erase, press=False):
         if not self.turn_blocks or not self.tablet_colors:
             return
+        if press:
+            self._stroke_saved = False
         x, y = self.turn_canvas.canvasx(event.x), event.y
         row = int(y // CELL)
         if row == 0:  # header row: click a tablet's number to trace it
@@ -636,7 +638,7 @@ class InkleApp(tk.Tk):
         n = len(self.tablet_colors)
         if not n:
             return
-        self._checkpoint()
+        self._push_undo()
         self.turn_blocks.append({"pattern": ["F"] * n, "repeats": 4, "flips": [False] * n})
         self._active_turn_block = len(self.turn_blocks) - 1
         self._draw_turn_blocks()
@@ -645,7 +647,7 @@ class InkleApp(tk.Tk):
     def _duplicate_turn_block(self):
         if not self.turn_blocks:
             return
-        self._checkpoint()
+        self._push_undo()
         src = self.turn_blocks[-1]
         n = len(src["pattern"])
         self.turn_blocks.append({"pattern": list(src["pattern"]), "repeats": src["repeats"],
@@ -659,7 +661,7 @@ class InkleApp(tk.Tk):
             return
         b = self.turn_blocks[self._active_turn_block]
         n = len(b["pattern"])
-        self._checkpoint()
+        self._push_undo()
         if kind == "f":
             b["pattern"] = ["F"] * n
         elif kind == "b":

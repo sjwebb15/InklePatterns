@@ -6,17 +6,15 @@ straps and trim. You set up the warp threads, color them, add pick-up
 threads, and see a preview of the woven band. You can also preview a section
 of the pattern repeated down the length of the band.
 
-The Windows program also designs tablet (card) woven bands: you thread the
-cards, set the turning sequence, and see the band that results (section 13).
+It also designs tablet (card) woven bands: you thread the cards, set the
+turning sequence, and see the band that results (section 13).
 
-There are two versions:
+There are two versions, and they work the same way:
   - A Windows program (InklePatterns.exe).
   - A web version that runs in any modern browser, with nothing to install:
     https://sjwebb15.github.io/InklePatterns/
-Both do inkle weaving the same way, and inkle pattern files (.inkl) made in
-one open in the other. Tablet weaving is in the Windows program only, for
-now. This manual describes both. Section 16 lists the differences in the web
-version.
+Pattern files (.inkl) made in one open in the other. This manual describes
+both. Section 16 lists the few differences in the web version.
 
 
 CONTENTS
@@ -59,8 +57,8 @@ If this is the first time on that computer, run setup.bat first.)
 The window has three areas:
 
   - Top: the H/U warping grid, across the full width of the window.
-  - Bottom left: the tool boxes (Warp threads, Preview zoom, Tool, Preset
-    colors, Custom color, Repeat preview). They rearrange themselves into
+  - Bottom left: the tool boxes (Warp threads, Preview zoom, Preset colors,
+    Custom color, Tool, Repeat preview). They rearrange themselves into
     one, two or three columns to fit the window height, so you never need to
     scroll to reach a control.
   - Bottom right: the pattern preview, showing how the woven band will look.
@@ -271,9 +269,9 @@ Tips:
   - Undo (Ctrl+Z) takes back your last change. Press it repeatedly to go
     further back, up to 500 steps.
   - Redo (Ctrl+Y) puts back a change you just undid.
-  - You can use the Undo and Redo buttons in the Tool box, the Edit menu,
-    or the keyboard shortcuts. A button is grayed out when there is nothing
-    to undo or redo.
+  - You can use the Undo and Redo buttons in the Warp threads box, the Edit
+    menu, or the keyboard shortcuts. A button is grayed out when there is
+    nothing to undo or redo.
 
 What counts as one step:
   - A single click, or a whole click-and-drag stroke, whether coloring,
@@ -457,9 +455,8 @@ Keyboard
 
 16. THE WEB VERSION
 -------------------
-The web version has the same controls as the Windows program for inkle
-weaving, with the differences below. It does not have tablet weaving yet,
-and it shows an error if you open a tablet pattern file in it.
+The web version has the same controls as the Windows program, with these
+differences:
 
 Saving and opening
   - In Chrome and Edge, Save and Open work like a desktop program: you
@@ -472,7 +469,9 @@ Saving and opening
 
 Unsaved changes
   - Unlike the Windows program, the web version warns you if you try to
-    close or reload the page with unsaved changes.
+    close or reload the page with unsaved changes. It also asks before
+    switching between inkle and tablet weaving if there are unsaved
+    changes.
 
 Preset colors
   - Your palette is saved in your browser, so it stays on that computer and
@@ -480,16 +479,22 @@ Preset colors
   - The Reset button in the Preset colors box restores the original
     palette.
 
-Repeat preview
-  - Opens as a large panel on top of the page rather than a separate
+Repeat preview and tablet trace
+  - Each opens as a panel on top of the page rather than a separate
     window. Close it with the Close button or the Esc key. Only one can be
     open at a time.
 
 Tablets and touch screens
-  - Tick "Eraser (left-click erases)" in the Tool box to erase with a tap
-    or a plain click, since there's no right-click.
+  - Tick "Eraser (left-click erases)" in the Warp threads box to erase with
+    a tap or a plain click, since there's no right-click. In tablet
+    weaving, Eraser also makes turning-sequence cells idle and takes one
+    pick off a block's repeat count.
   - To remove a pick-up on a touch screen, tick Eraser while using the
     Pick-up tool.
+  - To flip cards without a Shift key, tick "Flip mode" in the Turning
+    sequence box: each click or tap then marks or removes a flip.
+  - In the turning sequence, a tap changes one cell. Swipe to scroll a
+    sequence that is wider than the box.
 
 Small screens
   - In a narrow window (such as a phone), the tool boxes sit above the

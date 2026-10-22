@@ -36,17 +36,28 @@ body {
 .help { color: var(--accent); text-decoration: none; padding: 5px 8px; }
 .help:hover { text-decoration: underline; }
 
-/* H/U grid: fixed height, full width */
+/* threading grid: fixed height (set from app.js: 2 rows for inkle, 5 for tablets), full width */
 #gridWrap { flex: none; height: 68px; background: var(--canvas); border-bottom: 1px solid var(--border); }
 #gridCanvas { display: block; width: 100%; height: 100%; touch-action: none; }
 
-/* tools on the left, preview filling the rest */
+/* tools on the left, a draggable divider, preview filling the rest */
 main { flex: 1; display: flex; min-height: 0; }
-#toolsPane { flex: none; overflow: auto; border-right: 1px solid var(--border); }
+#toolsPane { flex: none; overflow: auto; }
 #tools { display: grid; gap: 12px; padding: 12px; align-items: start; }
+#splitter {
+  flex: none;
+  width: 6px;
+  cursor: col-resize;
+  background: var(--bg);
+  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  touch-action: none;
+}
+#splitter:hover, #splitter:focus-visible { background: #DCE6F2; outline: none; }
 #previewPane { flex: 1; min-width: 0; background: var(--canvas); }
 
 .box {
+  justify-self: start; /* natural size; only the turning-sequence box stretches into extra width */
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -62,8 +73,10 @@ main { flex: 1; display: flex; min-height: 0; }
 }
 .row { display: flex; align-items: center; gap: 6px; }
 .gap-top { margin-top: 8px; }
+.gap-small { margin-top: 4px; }
 .undo-row { margin-top: 10px; }
 .hint { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
+.desc { margin: 0; }
 
 /* controls */
 button {
@@ -90,7 +103,7 @@ input[type=number] {
   border-radius: 6px;
   background: #FFFFFF;
 }
-#rangeStart, #rangeEnd { width: 56px; }
+#rangeStart, #rangeEnd, #traceNum { width: 56px; }
 input[type=range] { accent-color: var(--accent); width: 120px; }
 input[type=radio], input[type=checkbox] { accent-color: var(--accent); margin: 0; }
 .check { display: flex; align-items: center; gap: 7px; margin: 4px 0; cursor: pointer; user-select: none; }
@@ -109,23 +122,33 @@ input[type=radio], input[type=checkbox] { accent-color: var(--accent); margin: 0
 #curSwatch { width: 44px; height: 28px; border: 1px solid var(--border); border-radius: 4px; }
 .hex { margin-left: 6px; font-variant-numeric: tabular-nums; }
 
+/* turning sequence: the grid scrolls inside the box rather than widening it */
+#turnBox { justify-self: stretch; min-width: 380px; }
+#turnScroll { width: 0; min-width: 100%; overflow-x: auto; margin: 6px 0; }
+#turnCanvas { display: block; touch-action: pan-x pan-y; }
+button.bulk { min-width: 100px; }
+
 /* canvas drawn under a transparent scroller (see ScrollView in app.js) */
 .scrollview { position: relative; overflow: hidden; }
 .scrollview canvas { position: absolute; left: 0; top: 0; }
 .sv-scroller { position: absolute; inset: 0; }
 .sv-scroller.paint { touch-action: none; }
 
-/* repeat preview */
-#repeatDlg {
-  width: min(1000px, 94vw);
-  height: 90vh;
+/* repeat preview and tablet trace */
+#repeatDlg, #traceDlg {
   padding: 0;
   border: 1px solid var(--border);
   border-radius: 10px;
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
 }
-#repeatDlg[open] { display: flex; flex-direction: column; }
-#repeatDlg::backdrop { background: rgba(0, 0, 0, 0.3); }
+#repeatDlg { width: min(1000px, 94vw); height: 90vh; }
+#traceDlg { width: min(380px, 94vw); height: min(620px, 90vh); }
+#repeatDlg[open], #traceDlg[open] { display: flex; flex-direction: column; }
+#repeatDlg::backdrop, #traceDlg::backdrop { background: rgba(0, 0, 0, 0.3); }
+#traceWrap { flex: 1; min-height: 0; overflow: auto; padding: 0 10px 10px; }
+#traceTable { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+#traceTable th, #traceTable td { padding: 3px 6px; text-align: center; }
+#traceTable th { position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--border); }
 .dlgbar {
   display: flex;
   align-items: center;
@@ -143,6 +166,9 @@ input[type=radio], input[type=checkbox] { accent-color: var(--accent); margin: 0
   body { min-height: 100vh; }
   .filebtns { margin-left: 0; }
   main { flex-direction: column; }
-  #toolsPane { overflow: visible; border-right: 0; border-bottom: 1px solid var(--border); }
+  #toolsPane { width: auto !important; overflow: visible; border-bottom: 1px solid var(--border); }
+  #splitter { display: none; }
+  .box { justify-self: stretch; }
+  #turnBox { min-width: 0; }
   #previewPane { flex: none; height: 75vh; }
 }

@@ -24,6 +24,13 @@ const LINE = "#C8CCD2"; // grid cell outlines
 const HEX_LINE = "#3A3A3A"; // hexagon outlines
 const CANVAS_BG = "#F0F1F3";
 const ACCENT = "#0067C0";
+const TABLET_HOLES = "ABCD"; // a tablet's four holes, clockwise on its front face
+const TABLET_TILT_DEG = 21; // lean angle of each tablet's oval, off vertical
+const TABLET_FILL = 1.25; // how much of its own cell each oval occupies; >1 lets neighbors overlap
+const TURN_CELL_W = 18; // width of one tablet's F/B cell in the turning-sequence editor
+const TURN_LABEL_W = 56; // width of the repeats/delete control area at the left of each block row
+const TRACE_ROWS = 32;
+const FONT = "'Segoe UI', system-ui, sans-serif";
 
 const $ = (id) => document.getElementById(id);
 const pkey = (i, r) => i + "," + r; // pick-ups are stored as "thread,row" strings in a Set
@@ -81,6 +88,95 @@ function drawHoneycomb(ctx, threads, pickups, x0, py, hw, a, spacing, rows, rota
   }
 }
 
+// ---------- tablet weaving (same as inkle.py) ----------
+
+/** Which way a cell's oval tips: the tablet's Z/S threading, flipped whenever it's turning backward. */
+function tabletLean(isZ, backwardPick) {
+  return isZ !== backwardPick;
+}
+
+/** Picks in one full cycle of the turning sequence (sum of each block's repeat count). */
+function turnBlocksTotal(blocks) {
+  return blocks.reduce((sum, b) => sum + Math.max(0, b.repeats), 0);
+}
+
+/** "F", "B" or "I" (idle: the card doesn't turn this pick) for `tablet` at 1-indexed `pick`. Each
+ *  block holds one state per tablet for its own repeat count; blocks run in order, then the whole
+ *  sequence repeats. This is what lets different tablets turn differently at the same pick. */
+function turnStateAt(blocks, tablet, pick) {
+  const total = turnBlocksTotal(blocks);
+  if (total <= 0) return "F";
+  let pos = (pick - 1) % total;
+  for (const b of blocks) {
+    const reps = Math.max(0, b.repeats);
+    if (pos < reps) return tablet < b.pattern.length ? b.pattern[tablet] : "I";
+    pos -= reps;
+  }
+  return "I";
+}
+
+/** [block, isFirstPickOfThisOccurrence] for 1-indexed `pick`, or [null, false]. "First pick" is true
+ *  every time the cycle comes back round to a block, since a flip is a per-block-entry event. */
+function turnBlockEntryAt(blocks, pick) {
+  const total = turnBlocksTotal(blocks);
+  if (total <= 0) return [null, false];
+  let pos = (pick - 1) % total;
+  for (const b of blocks) {
+    const reps = Math.max(0, b.repeats);
+    if (pos < reps) return [b, pos === 0];
+    pos -= reps;
+  }
+  return [null, false];
+}
+
+/** Yield [pick, state, holeIndex, isZNow] for picks 1..rows: which hole (0=A..3=D) shows, what the
+ *  tablet did to get there, and its current threading. The single source of truth for both the
+ *  preview and the trace, so they can't diverge.
+ *  Hole order is the same for every tablet whatever its S/Z threading (S/Z only changes the lean):
+ *  a forward turn steps A->D->C->B->A, a backward turn the other way. A turn opposite to the
+ *  tablet's previous one (a reversal) repeats the same hole for that pick. Idle picks change nothing
+ *  and don't count as the previous turn. A block's `flips` turn a card over (S<->Z) each time that
+ *  block is reached. */
+function* tabletHoleTrace(blocks, tablet, rows, homeIsZ) {
+  let idx = 0;
+  let lastDir = null; // last non-idle direction ("F" or "B"), ignoring idle picks entirely
+  let isZNow = homeIsZ;
+  for (let pick = 1; pick <= rows; pick++) {
+    const [block, isEntry] = turnBlockEntryAt(blocks, pick);
+    if (isEntry && block && block.flips && block.flips[tablet]) isZNow = !isZNow;
+    const state = turnStateAt(blocks, tablet, pick);
+    if (state !== "I") {
+      if (lastDir === null || state === lastDir) idx = (idx + (state === "F" ? 3 : 1)) % 4;
+      // else: reversal -- idx repeats the previous pick's hole, no advance
+      lastDir = state;
+    }
+    yield [pick, state, idx, isZNow];
+  }
+}
+
+/** Draw the woven band: one tilted oval per tablet per pick, each centered in its own cell with no
+ *  dependency on its neighbors. Only tablets cFrom..cTo are drawn (the visible ones). */
+function drawTabletBand(ctx, colors, isZ, blocks, x0, y0, cellW, cellH, rows, cFrom = 0, cTo = colors.length - 1) {
+  const halfLong = cellH / 2 * TABLET_FILL;
+  const halfShort = cellW / 2 * TABLET_FILL * 0.85;
+  const tilt = TABLET_TILT_DEG * Math.PI / 180;
+  ctx.strokeStyle = HEX_LINE;
+  ctx.lineWidth = 1;
+  for (let col = Math.max(0, cFrom); col <= Math.min(cTo, colors.length - 1); col++) {
+    const cx = x0 + (col + 0.5) * cellW;
+    let angle = tabletLean(isZ[col], false) ? tilt : -tilt; // lean before this tablet ever turns
+    for (const [pick, state, idx, isZNow] of tabletHoleTrace(blocks, col, rows, isZ[col])) {
+      if (state !== "I") angle = tabletLean(isZNow, state === "B") ? tilt : -tilt; // idle: nothing moves
+      const cy = y0 + (pick - 0.5) * cellH;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, halfShort, halfLong, angle, 0, 2 * Math.PI);
+      ctx.fillStyle = colors[col][idx] || EMPTY;
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+}
+
 // ---------- ScrollView: a viewport-sized canvas under a transparent scroller ----------
 // Browsers cap canvas size (a long repeat preview can be far taller), so only the visible part is drawn.
 
@@ -128,24 +224,32 @@ class ScrollView {
   }
 }
 
-/** Left-click/drag paints, right-click/drag erases (also left with the Eraser box ticked). */
-function bindPaint(el, pointOf, handler) {
-  let drag = null;
+/** Left-click/drag paints, right-click/drag erases (also left with the Eraser box ticked).
+ *  With `tapTouch`, a touch acts only as a tap, on release, so swiping can scroll the element instead. */
+function bindPaint(el, pointOf, handler, { tapTouch = false } = {}) {
+  let drag = null, tap = null;
   el.addEventListener("pointerdown", (e) => {
     if (e.button !== 0 && e.button !== 2) return;
     const rect = el.getBoundingClientRect();
     if (e.clientX - rect.left >= el.clientWidth || e.clientY - rect.top >= el.clientHeight) return; // scrollbar
+    const erase = e.button === 2 || $("eraser").checked;
+    if (tapTouch && e.pointerType === "touch") {
+      tap = { pt: pointOf(e), erase, shift: e.shiftKey };
+      return;
+    }
     e.preventDefault();
     try { el.setPointerCapture(e.pointerId); } catch (_) { /* synthetic events */ }
-    drag = { erase: e.button === 2 || $("eraser").checked };
+    drag = { erase };
     handler(pointOf(e), drag.erase, true, e.shiftKey);
   });
   el.addEventListener("pointermove", (e) => {
     if (drag) handler(pointOf(e), drag.erase, false, e.shiftKey);
   });
-  const end = () => { drag = null; };
-  el.addEventListener("pointerup", end);
-  el.addEventListener("pointercancel", end);
+  el.addEventListener("pointerup", () => {
+    if (tap) handler(tap.pt, tap.erase, true, tap.shift);
+    drag = tap = null;
+  });
+  el.addEventListener("pointercancel", () => { drag = tap = null; });
   el.addEventListener("contextmenu", (e) => e.preventDefault());
 }
 
@@ -166,14 +270,24 @@ function bindWheelZoom(el, zoomBy) {
 // ---------- state ----------
 
 const S = {
+  weave: "inkle", // "inkle" (pick-up) or "tablet" (card weaving)
   threads: [], // color hex or null per thread; even index = heddled, odd = unheddled
   pickups: new Set(), // "thread,row": hexagon at that row is joined to the one two rows above
   range: [0, 0], // (first row, last row) of the preview used as the repeat unit
   visibleRows: 1,
   rotated: false,
+  tabletColors: [], // per tablet: [A, B, C, D] hole colors, hex or null
+  tabletSz: [], // per tablet: true = Z-threaded, false = S-threaded
+  // turning sequence: blocks of {pattern: "F"/"B"/"I" per tablet, repeats, flips: bool per tablet},
+  // run in order and then repeated -- lets different tablets reverse at different picks
+  turnBlocks: [],
+  activeTurnBlock: 0, // which block the bulk-edit buttons act on
+  turnDragBlock: null,
+  turnDragTarget: "B",
+  turnShiftStroke: false, // whether the in-progress click/drag started as a flip
   color: "#DC143C",
   presets: loadPresets(),
-  undo: [], redo: [], // (threads, pickups) snapshots; one entry per click/drag stroke or Generate
+  undo: [], redo: [], // pattern snapshots; one entry per click/drag stroke or Generate
   strokeSaved: false,
   pickTarget: true,
   rangeAnchor: null,
@@ -183,6 +297,7 @@ const S = {
 };
 
 const mode = () => document.querySelector('input[name="mode"]:checked').value;
+const isTablet = () => S.weave === "tablet";
 const zoomLevel = () => Number($("zoom").value);
 
 // ---------- presets ----------
@@ -243,7 +358,17 @@ function refreshSwatch() {
 
 // ---------- undo / redo ----------
 
-const snapshot = () => [S.threads.slice(), new Set(S.pickups)];
+const copyBlocks = (blocks) => blocks.map((b) => ({
+  pattern: b.pattern.slice(), repeats: b.repeats, flips: (b.flips || b.pattern.map(() => false)).slice(),
+}));
+
+function snapshot() {
+  if (isTablet()) {
+    return { mode: "tablet", tabletColors: S.tabletColors.map((c) => c.slice()), tabletSz: S.tabletSz.slice(),
+             turnBlocks: copyBlocks(S.turnBlocks) };
+  }
+  return { mode: "inkle", threads: S.threads.slice(), pickups: new Set(S.pickups) };
+}
 
 function pushUndo() {
   S.undo.push(snapshot());
@@ -269,10 +394,18 @@ function redo() {
   if (S.redo.length) { S.undo.push(snapshot()); restore(S.redo.pop()); }
 }
 
-function restore([threads, pickups]) {
-  S.threads = threads.slice();
-  S.pickups = new Set(pickups);
-  $("count").value = S.threads.length;
+function restore(state) {
+  if (state.mode === "tablet") {
+    S.tabletColors = state.tabletColors.map((c) => c.slice());
+    S.tabletSz = state.tabletSz.slice();
+    S.turnBlocks = copyBlocks(state.turnBlocks);
+    S.activeTurnBlock = Math.min(S.activeTurnBlock, S.turnBlocks.length - 1);
+    $("count").value = S.tabletColors.length;
+  } else {
+    S.threads = state.threads.slice();
+    S.pickups = new Set(state.pickups);
+    $("count").value = S.threads.length;
+  }
   S.dirty = true;
   updateUndoButtons();
   refresh();
@@ -292,18 +425,59 @@ function updateUndoButtons() {
 // ---------- pattern ----------
 
 function generate() {
+  const tablet = isTablet();
   const n = parseWhole($("count").value);
   if (!(n >= 1 && n <= 200)) {
-    alert("Enter a whole number of threads between 1 and 200.");
+    alert(`Enter a whole number of ${tablet ? "tablets" : "threads"} between 1 and 200.`);
     return;
   }
-  const had = S.threads.length > 0;
+  const had = (tablet ? S.tabletColors : S.threads).length > 0;
   if (had) pushUndo(); // lets an accidental Generate be undone
-  S.threads = new Array(n).fill(null);
-  S.pickups = new Set();
+  if (tablet) {
+    S.tabletColors = Array.from({ length: n }, () => [null, null, null, null]);
+    S.tabletSz = Array.from({ length: n }, (_, i) => i % 2 === 1);
+    S.turnBlocks = defaultTurnBlocks(n);
+    S.activeTurnBlock = 0;
+  } else {
+    S.threads = new Array(n).fill(null);
+    S.pickups = new Set();
+  }
   S.dirty = had;
   refresh();
-  selectFullRange();
+  if (!tablet) selectFullRange();
+}
+
+/** Switch the tool boxes, grid and preview between inkle pick-up and tablet card weaving. */
+function onWeaveTypeChange(reset = true) {
+  const tablet = isTablet();
+  $("warpTitle").textContent = tablet ? "Tablets" : "Warp threads";
+  $("count").setAttribute("aria-label", tablet ? "Number of tablets" : "Number of warp threads");
+  $("toolBox").hidden = tablet;
+  $("repeatBox").hidden = tablet;
+  $("turnBox").hidden = !tablet;
+  if (tablet) {
+    $("rotate").checked = false;
+    S.rotated = false;
+  }
+  $("rotate").disabled = tablet;
+  $("gridWrap").style.height = gridHeight() + "px";
+  if (reset) {
+    S.threads = [];
+    S.pickups = new Set();
+    S.tabletColors = [];
+    S.tabletSz = [];
+    S.turnBlocks = [];
+    S.activeTurnBlock = 0;
+    clearHistory();
+    $("count").value = 15;
+    S.fileName = null;
+    S.fileHandle = null;
+    S.dirty = false;
+    updateTitle();
+  }
+  preview.scroller.scrollTo(0, 0);
+  arrangeTools();
+  refresh();
 }
 
 function selectFullRange() {
@@ -341,12 +515,16 @@ function zoomBy(d) {
   redraw();
 }
 
-// ---------- H/U grid ----------
+// ---------- threading grid (H/U, or tablet holes A-D plus S/Z) ----------
 
 const gridCanvas = $("gridCanvas");
 
-function gridCellWidth() {
-  const n = S.threads.length;
+function gridHeight() {
+  return PAD * 2 + (isTablet() ? TABLET_HOLES.length + 1 : 2) * CELL;
+}
+
+/** Width of one grid column: shrinks or grows so the whole grid always fits, no scrolling needed. */
+function gridCellWidth(n = (isTablet() ? S.tabletColors : S.threads).length) {
   if (!n) return CELL;
   const avail = Math.max(gridCanvas.clientWidth - PAD - LABEL_W - PAD, 1);
   return clamp(avail / n, GRID_CELL_MIN, GRID_CELL_MAX);
@@ -362,14 +540,19 @@ function drawGrid() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = CANVAS_BG;
   ctx.fillRect(0, 0, w, h);
-  const n = S.threads.length;
-  if (!n) return;
-  const gcell = gridCellWidth(), x0 = PAD + LABEL_W;
-  ctx.font = "bold 15px 'Segoe UI', system-ui, sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.strokeStyle = LINE;
   ctx.lineWidth = 1;
+  if (isTablet()) drawTabletGrid(ctx);
+  else drawInkleGrid(ctx);
+}
+
+function drawInkleGrid(ctx) {
+  const n = S.threads.length;
+  if (!n) return;
+  const gcell = gridCellWidth(n), x0 = PAD + LABEL_W;
+  ctx.font = "bold 15px " + FONT;
   ["H", "U"].forEach((lab, r) => {
     ctx.fillStyle = "#1B1B1F";
     ctx.fillText(lab, PAD + LABEL_W / 2, PAD + r * CELL + CELL / 2);
@@ -379,6 +562,35 @@ function drawGrid() {
       ctx.strokeRect(x0 + i * gcell, PAD + r * CELL, gcell, CELL);
     }
   });
+}
+
+/** Four hole rows (A-D, paintable) plus an S/Z row (click to flip a tablet's threading). */
+function drawTabletGrid(ctx) {
+  const n = S.tabletColors.length;
+  if (!n) return;
+  const gcell = gridCellWidth(n), x0 = PAD + LABEL_W;
+  ctx.font = "bold 15px " + FONT;
+  [...TABLET_HOLES].forEach((lab, r) => {
+    ctx.fillStyle = "#1B1B1F";
+    ctx.fillText(lab, PAD + LABEL_W / 2, PAD + r * CELL + CELL / 2);
+    for (let i = 0; i < n; i++) {
+      ctx.fillStyle = S.tabletColors[i][r] || EMPTY;
+      ctx.fillRect(x0 + i * gcell, PAD + r * CELL, gcell, CELL);
+      ctx.strokeRect(x0 + i * gcell, PAD + r * CELL, gcell, CELL);
+    }
+  });
+  const szRow = TABLET_HOLES.length, y = PAD + szRow * CELL;
+  ctx.font = "bold 12px " + FONT;
+  ctx.fillStyle = "#1B1B1F";
+  ctx.fillText("S/Z", PAD + LABEL_W / 2, y + CELL / 2);
+  for (let i = 0; i < n; i++) {
+    const isZ = S.tabletSz[i];
+    ctx.fillStyle = CANVAS_BG;
+    ctx.fillRect(x0 + i * gcell, y, gcell, CELL);
+    ctx.strokeRect(x0 + i * gcell, y, gcell, CELL);
+    ctx.fillStyle = isZ ? "#6a7fb0" : "#b0756a";
+    ctx.fillText(isZ ? "Z" : "S", x0 + (i + 0.5) * gcell, y + CELL / 2);
+  }
 }
 
 function gridThreadAt(x, y) {
@@ -395,6 +607,33 @@ function gridThreadAt(x, y) {
 const preview = new ScrollView($("previewPane"), drawPreview, { paint: true });
 
 function redraw() {
+  if (isTablet()) redrawTablet();
+  else redrawInkle();
+}
+
+function redrawTablet() {
+  const sc = preview.scroller;
+  sc.style.overflowX = "scroll";
+  sc.style.overflowY = "hidden";
+  const w = preview.viewW, h = preview.viewH, n = S.tabletColors.length;
+  if (!n) {
+    S.geom = null;
+    preview.setContentSize(w, h);
+    preview.render();
+    return;
+  }
+  const x0 = PAD + LABEL_W, y0 = PAD;
+  const availH = Math.max(h - y0 - PAD, 1);
+  const cellW = zoomLevel() * 2;
+  const cellH = Math.round(cellW * 1.8);
+  const rows = Math.max(4, Math.floor(availH / cellH));
+  S.visibleRows = rows;
+  S.geom = { x0, y0, cellW, cellH, rows };
+  preview.setContentSize(Math.max(x0 + n * cellW + PAD, w), h);
+  preview.render();
+}
+
+function redrawInkle() {
   const sc = preview.scroller;
   // the thread axis scrolls; the row axis just fits as many rows as there's room for
   sc.style.overflowX = S.rotated ? "hidden" : "scroll";
@@ -423,10 +662,18 @@ function redraw() {
 function drawPreview(ctx, sx, sy, vw, vh) {
   if (!S.geom) {
     ctx.fillStyle = "#777777";
-    ctx.font = "16px 'Segoe UI', system-ui, sans-serif";
+    ctx.font = "16px " + FONT;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
-    ctx.fillText("Enter the number of warp threads and click Generate", sx + vw / 2, sy + vh / 2);
+    const what = isTablet() ? "tablets" : "warp threads";
+    ctx.fillText(`Enter the number of ${what} and click Generate`, sx + vw / 2, sy + vh / 2);
+    return;
+  }
+  if (isTablet()) {
+    const { x0, y0, cellW, cellH, rows } = S.geom;
+    // draw only the tablets in view, plus one each side whose ovals overlap into it
+    const cFrom = Math.floor((sx - x0) / cellW) - 1, cTo = Math.ceil((sx + vw - x0) / cellW) + 1;
+    drawTabletBand(ctx, S.tabletColors, S.tabletSz, S.turnBlocks, x0, y0, cellW, cellH, rows, cFrom, cTo);
     return;
   }
   const { hw, a, spacing, rows, acrossOrigin, alongOrigin } = S.geom;
@@ -479,6 +726,7 @@ function cellAt(x, y) {
 }
 
 function onPreview(pt, erase, press, shift) {
+  if (isTablet()) return; // the tablet preview is read-only; edit threading and turning in the panels instead
   if (!S.threads.length) return;
   if (press) S.strokeSaved = false;
   const m = mode();
@@ -495,6 +743,7 @@ function onPreview(pt, erase, press, shift) {
 }
 
 function onGrid(pt, erase, press, shift) {
+  if (isTablet()) return onTabletGrid(pt, erase, press);
   if (!S.threads.length) return;
   if (press) S.strokeSaved = false;
   // the H/U grid only colors threads; pick-up and row-select tools have no meaning here
@@ -505,6 +754,31 @@ function onGrid(pt, erase, press, shift) {
   if (S.threads[i] !== nv) {
     checkpoint();
     S.threads[i] = nv;
+    refresh();
+  }
+}
+
+function onTabletGrid(pt, erase, press) {
+  const n = S.tabletColors.length;
+  if (!n) return;
+  if (press) S.strokeSaved = false;
+  const x0 = PAD + LABEL_W;
+  if (pt.x < x0 || pt.y < PAD) return;
+  const i = Math.floor((pt.x - x0) / gridCellWidth(n));
+  const row = Math.floor((pt.y - PAD) / CELL);
+  if (i < 0 || i >= n || row < 0 || row > TABLET_HOLES.length) return;
+  if (row === TABLET_HOLES.length) { // S/Z row: a left-click press flips the tablet's threading
+    if (press && !erase) {
+      checkpoint();
+      S.tabletSz[i] = !S.tabletSz[i];
+      refresh();
+    }
+    return;
+  }
+  const nv = erase ? null : S.color;
+  if (S.tabletColors[i][row] !== nv) {
+    checkpoint();
+    S.tabletColors[i][row] = nv;
     refresh();
   }
 }
@@ -531,9 +805,214 @@ function onPickup(pt, erase, press) {
   }
 }
 
+/** Redraw the threading grid, the preview, and (in tablet mode) the turning-sequence editor. */
 function refresh() {
   drawGrid();
   redraw();
+  if (isTablet()) drawTurnBlocks();
+}
+
+// ---------- turning sequence editor ----------
+
+const turnCanvas = $("turnCanvas");
+
+function defaultTurnBlocks(n) {
+  return [{ pattern: new Array(n).fill("F"), repeats: 4, flips: new Array(n).fill(false) },
+          { pattern: new Array(n).fill("B"), repeats: 4, flips: new Array(n).fill(false) }];
+}
+
+/** A header of tablet numbers, then one row per block: delete and repeat-count controls on the
+ *  left, that block's per-tablet F/B/idle cells after. */
+function drawTurnBlocks() {
+  const n = S.tabletColors.length, blocks = S.turnBlocks;
+  const h = (blocks.length + 1) * CELL;
+  const contentW = n && blocks.length ? TURN_LABEL_W + n * TURN_CELL_W : 1;
+  const dpr = window.devicePixelRatio || 1;
+  turnCanvas.style.width = contentW + "px";
+  turnCanvas.style.height = h + "px";
+  turnCanvas.width = Math.round(contentW * dpr);
+  turnCanvas.height = Math.round(h * dpr);
+  const ctx = turnCanvas.getContext("2d");
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.fillStyle = CANVAS_BG;
+  ctx.fillRect(0, 0, contentW, h);
+  if (!n || !blocks.length) return;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.font = "11px " + FONT;
+  ctx.fillStyle = "#1B1B1F";
+  for (let i = 0; i < n; i++) ctx.fillText(String(i + 1), TURN_LABEL_W + (i + 0.5) * TURN_CELL_W, CELL / 2);
+  const fills = { F: "#C9A227", B: "#5B6B8C", I: CANVAS_BG };
+  ctx.strokeStyle = LINE;
+  ctx.lineWidth = 1;
+  blocks.forEach((b, bi) => {
+    const y0 = (bi + 1) * CELL;
+    ctx.fillStyle = bi === S.activeTurnBlock ? "#E7EEF8" : CANVAS_BG;
+    ctx.fillRect(0, y0, contentW, CELL);
+    ctx.font = "bold 13px " + FONT;
+    ctx.fillStyle = "#A33333";
+    ctx.fillText("×", 14, y0 + CELL / 2);
+    ctx.font = "12px " + FONT;
+    ctx.fillStyle = "#1B1B1F";
+    ctx.fillText(b.repeats + "×", TURN_LABEL_W - 16, y0 + CELL / 2);
+    const flips = b.flips || [];
+    ctx.font = "bold 11px " + FONT;
+    b.pattern.forEach((state, i) => {
+      const x0 = TURN_LABEL_W + i * TURN_CELL_W;
+      ctx.fillStyle = fills[state];
+      ctx.fillRect(x0 + 1, y0 + 2, TURN_CELL_W - 2, CELL - 4);
+      ctx.strokeRect(x0 + 1.5, y0 + 2.5, TURN_CELL_W - 3, CELL - 5);
+      if (state !== "I") {
+        ctx.fillStyle = "#FFFFFF";
+        ctx.fillText(state, x0 + TURN_CELL_W / 2, y0 + CELL / 2);
+      }
+      if (flips[i]) { // flip marker: small triangle, top-right corner
+        ctx.fillStyle = "#E8699A";
+        ctx.beginPath();
+        ctx.moveTo(x0 + TURN_CELL_W - 7, y0 + 2);
+        ctx.lineTo(x0 + TURN_CELL_W - 1, y0 + 2);
+        ctx.lineTo(x0 + TURN_CELL_W - 1, y0 + 8);
+        ctx.closePath();
+        ctx.fill();
+      }
+    });
+  });
+}
+
+function onTurn(pt, erase, press, shift) {
+  if (!S.turnBlocks.length || !S.tabletColors.length) return;
+  if (press) S.strokeSaved = false;
+  const { x, y } = pt, n = S.tabletColors.length;
+  const row = Math.floor(y / CELL);
+  if (row === 0) { // header row: click a tablet's number to trace it
+    if (press && x >= TURN_LABEL_W) {
+      const tablet = Math.floor((x - TURN_LABEL_W) / TURN_CELL_W);
+      if (tablet >= 0 && tablet < n) openTabletTrace(tablet);
+    }
+    return;
+  }
+  const blockIdx = row - 1;
+  if (blockIdx < 0 || blockIdx >= S.turnBlocks.length) return;
+  if (x < TURN_LABEL_W) {
+    if (press) onTurnLabel(blockIdx, x, erase);
+    return;
+  }
+  const tablet = Math.floor((x - TURN_LABEL_W) / TURN_CELL_W);
+  if (tablet < 0 || tablet >= n) return;
+  S.activeTurnBlock = blockIdx;
+  const block = S.turnBlocks[blockIdx];
+  if (press) S.turnShiftStroke = shift || $("flipMode").checked;
+  if (S.turnShiftStroke) {
+    // Shift+click (or Flip mode) toggles a flip; the whole stroke stays flip-only, so a pointer
+    // drifting during the click can't fall through to painting F/B instead
+    if (press) {
+      checkpoint();
+      if (!block.flips) block.flips = new Array(n).fill(false);
+      block.flips[tablet] = !block.flips[tablet];
+      drawTurnBlocks();
+      redraw();
+    }
+    return;
+  }
+  const pattern = block.pattern;
+  if (press) {
+    S.turnDragBlock = blockIdx;
+    S.turnDragTarget = pattern[tablet] === "B" ? "F" : "B";
+  }
+  if (S.turnDragBlock !== blockIdx) return;
+  const nv = erase ? "I" : S.turnDragTarget;
+  if (pattern[tablet] !== nv) {
+    checkpoint();
+    pattern[tablet] = nv;
+    drawTurnBlocks();
+    redraw();
+  }
+}
+
+function onTurnLabel(blockIdx, x, erase) {
+  if (x < 24) { // delete glyph
+    if (S.turnBlocks.length > 1 && !erase) {
+      checkpoint();
+      S.turnBlocks.splice(blockIdx, 1);
+      S.activeTurnBlock = Math.min(S.activeTurnBlock, S.turnBlocks.length - 1);
+      drawTurnBlocks();
+      redraw();
+    }
+    return;
+  }
+  checkpoint(); // repeat count: left-click +1, right-click -1
+  const b = S.turnBlocks[blockIdx];
+  b.repeats = clamp(b.repeats + (erase ? -1 : 1), 1, 999);
+  S.activeTurnBlock = blockIdx;
+  drawTurnBlocks();
+  redraw();
+}
+
+function addTurnBlock() {
+  const n = S.tabletColors.length;
+  if (!n) return;
+  pushUndo();
+  S.dirty = true;
+  S.turnBlocks.push({ pattern: new Array(n).fill("F"), repeats: 4, flips: new Array(n).fill(false) });
+  S.activeTurnBlock = S.turnBlocks.length - 1;
+  drawTurnBlocks();
+  redraw();
+}
+
+function duplicateTurnBlock() {
+  if (!S.turnBlocks.length) return;
+  pushUndo();
+  S.dirty = true;
+  S.turnBlocks.push(copyBlocks(S.turnBlocks.slice(-1))[0]);
+  S.activeTurnBlock = S.turnBlocks.length - 1;
+  drawTurnBlocks();
+  redraw();
+}
+
+function bulkTurnBlock(kind) {
+  if (!S.turnBlocks.length) return;
+  const b = S.turnBlocks[S.activeTurnBlock];
+  pushUndo();
+  S.dirty = true;
+  if (kind === "f") b.pattern = b.pattern.map(() => "F");
+  else if (kind === "b") b.pattern = b.pattern.map(() => "B");
+  else if (kind === "evens") b.pattern = b.pattern.map((v, i) => ((i + 1) % 2 === 0 ? "B" : v));
+  else if (kind === "odds") b.pattern = b.pattern.map((v, i) => ((i + 1) % 2 === 1 ? "B" : v));
+  drawTurnBlocks();
+  redraw();
+}
+
+// ---------- tablet trace ----------
+
+const traceDlg = $("traceDlg");
+
+function openTraceFromEntry() {
+  const tablet = parseWhole($("traceNum").value) - 1;
+  if (!(tablet >= 0 && tablet < S.tabletColors.length)) {
+    alert(`Enter a tablet number between 1 and ${S.tabletColors.length}.`);
+    return;
+  }
+  openTabletTrace(tablet);
+}
+
+/** Step-by-step table of one tablet's turns, holes and colors, for checking against a chart or a
+ *  woven sample. Built from the same tabletHoleTrace() the preview draws from. A snapshot. */
+function openTabletTrace(tablet) {
+  if (!S.tabletColors.length) return;
+  const colors = S.tabletColors[tablet], isZ = S.tabletSz[tablet];
+  $("traceTitle").textContent = `Tablet ${tablet + 1} — ${isZ ? "Z" : "S"}-threaded, home = hole A`;
+  const body = $("traceTable").tBodies[0];
+  body.textContent = "";
+  for (const [pick, state, idx, isZNow] of tabletHoleTrace(S.turnBlocks, tablet, TRACE_ROWS, isZ)) {
+    const color = colors[idx] || EMPTY;
+    const tr = body.insertRow();
+    for (const v of [pick, state, TABLET_HOLES[idx], color, isZNow ? "Z" : "S"]) tr.insertCell().textContent = v;
+    const [r, g, b] = [1, 3, 5].map((k) => parseInt(color.slice(k, k + 2), 16));
+    tr.style.background = color;
+    tr.style.color = 0.299 * r + 0.587 * g + 0.114 * b > 140 ? "#000000" : "#FFFFFF";
+  }
+  if (!traceDlg.open) traceDlg.showModal();
+  $("traceWrap").scrollTop = 0;
 }
 
 // ---------- repeat preview ----------
@@ -608,12 +1087,16 @@ function repeatZoomBy(d) {
 const FILE_TYPES = [{ description: "Inkle pattern", accept: { "application/json": [".inkl"] } }];
 
 function patternJSON() {
+  if (isTablet()) {
+    return JSON.stringify({ version: 4, mode: "tablet", tablet_colors: S.tabletColors, tablet_sz: S.tabletSz,
+                            turn_blocks: S.turnBlocks }, null, 1);
+  }
   const pickups = [...S.pickups].map(unkey).sort((p, q) => p[0] - q[0] || p[1] - q[1]);
-  return JSON.stringify({ version: 1, threads: S.threads, pickups, range: S.range }, null, 1);
+  return JSON.stringify({ version: 2, mode: "inkle", threads: S.threads, pickups, range: S.range }, null, 1);
 }
 
 async function saveFile(saveAs = false) {
-  if (!S.threads.length) {
+  if (!(isTablet() ? S.tabletColors : S.threads).length) {
     alert("Nothing to save. Generate a pattern first.");
     return;
   }
@@ -670,39 +1153,90 @@ async function openFile() {
   }
 }
 
+/** Validate a tablet pattern's fields; returns [colors, sz, blocks] or throws. */
+function readTabletData(data) {
+  const isHex = (h) => h === null || (typeof h === "string" && HEX_RE.test(h));
+  const colors = data.tablet_colors;
+  if (!(Array.isArray(colors) && colors.length >= 1 && colors.length <= 200 &&
+        colors.every((c) => Array.isArray(c) && c.length === 4 && c.every(isHex)))) {
+    throw new Error("invalid tablet threading");
+  }
+  const n = colors.length;
+  const sz = data.tablet_sz === undefined ? new Array(n).fill(false) : data.tablet_sz;
+  if (!(Array.isArray(sz) && sz.length === n)) throw new Error("invalid S/Z list");
+  let raw = data.turn_blocks;
+  if (raw === undefined || raw === null) { // pre-individualized-turning files: a flat shared F/B unit
+    const oldUnit = data.turn_unit === undefined ? [false, false, false, false, true, true, true, true] : data.turn_unit;
+    if (!Array.isArray(oldUnit)) throw new Error("invalid turning sequence");
+    raw = oldUnit.map((v) => ({ pattern: new Array(n).fill(v ? "B" : "F"), repeats: 1 }));
+  }
+  if (!(Array.isArray(raw) && raw.length >= 1 && raw.length <= 200)) throw new Error("invalid turning sequence");
+  const blocks = raw.map((blk) => {
+    const { pattern, repeats } = blk;
+    if (!(Array.isArray(pattern) && pattern.length === n && pattern.every((v) => v === "F" || v === "B" || v === "I"))) {
+      throw new Error("invalid turning block pattern");
+    }
+    if (!(Number.isInteger(repeats) && repeats >= 1 && repeats <= 999)) throw new Error("invalid turning block repeat count");
+    const flips = blk.flips === undefined ? new Array(n).fill(false) : blk.flips; // v3 files predate flips
+    if (!(Array.isArray(flips) && flips.length === n && flips.every((v) => typeof v === "boolean"))) {
+      throw new Error("invalid turning block flips");
+    }
+    return { pattern: pattern.slice(), repeats, flips: flips.slice() };
+  });
+  return [colors, sz, blocks];
+}
+
 function loadPattern(text, name, handle = null) {
-  let threads, pickups, rng;
+  let fileMode, threads, pickups, rng, colors, sz, blocks;
   try {
     const data = JSON.parse(text);
-    threads = data.threads;
-    if (!(Array.isArray(threads) && threads.length >= 1 && threads.length <= 200 &&
-          threads.every((t) => t === null || (typeof t === "string" && HEX_RE.test(t))))) {
-      throw new Error("invalid thread list");
+    fileMode = data.mode === "tablet" ? "tablet" : "inkle"; // files from before tablet mode are all inkle
+    if (fileMode === "tablet") {
+      [colors, sz, blocks] = readTabletData(data);
+    } else {
+      threads = data.threads;
+      if (!(Array.isArray(threads) && threads.length >= 1 && threads.length <= 200 &&
+            threads.every((t) => t === null || (typeof t === "string" && HEX_RE.test(t))))) {
+        throw new Error("invalid thread list");
+      }
+      const toInt = (v) => {
+        const x = Number(v);
+        if (typeof v === "boolean" || v === null || !Number.isFinite(x)) throw new Error("invalid number");
+        return Math.trunc(x);
+      };
+      pickups = (data.pickups || []).map((p) => {
+        if (!Array.isArray(p) || p.length !== 2) throw new Error("invalid pick-up");
+        return [toInt(p[0]), toInt(p[1])];
+      });
+      rng = Array.isArray(data.range) && data.range.length === 2 ? [toInt(data.range[0]), toInt(data.range[1])] : null;
     }
-    const toInt = (v) => {
-      const x = Number(v);
-      if (typeof v === "boolean" || v === null || !Number.isFinite(x)) throw new Error("invalid number");
-      return Math.trunc(x);
-    };
-    pickups = (data.pickups || []).map((p) => {
-      if (!Array.isArray(p) || p.length !== 2) throw new Error("invalid pick-up");
-      return [toInt(p[0]), toInt(p[1])];
-    });
-    rng = Array.isArray(data.range) && data.range.length === 2 ? [toInt(data.range[0]), toInt(data.range[1])] : null;
   } catch (e) {
     alert(`Could not read ${name}: ${e.message}`);
     return;
   }
-  S.threads = threads;
-  S.pickups = new Set(pickups.filter(([i]) => i >= 0 && i < threads.length).map(([i, r]) => pkey(i, r)));
-  $("count").value = threads.length;
+  S.weave = fileMode;
+  document.querySelector(`input[name="weave"][value="${fileMode}"]`).checked = true;
+  onWeaveTypeChange(false);
+  if (fileMode === "tablet") {
+    S.tabletColors = colors.map((c) => c.slice());
+    S.tabletSz = sz.map(Boolean);
+    S.turnBlocks = blocks;
+    S.activeTurnBlock = 0;
+    $("count").value = colors.length;
+  } else {
+    S.threads = threads;
+    S.pickups = new Set(pickups.filter(([i]) => i >= 0 && i < threads.length).map(([i, r]) => pkey(i, r)));
+    $("count").value = threads.length;
+  }
   clearHistory();
   S.fileName = name;
   S.fileHandle = handle;
   S.dirty = false;
   updateTitle();
   refresh();
-  if (rng) setRange(rng[0], rng[1]); else selectFullRange();
+  if (fileMode === "inkle") {
+    if (rng) setRange(rng[0], rng[1]); else selectFullRange();
+  }
 }
 
 function updateTitle() {
@@ -721,10 +1255,38 @@ function arrangeTools() {
     tools.style.gridTemplateColumns = "repeat(auto-fill, minmax(280px, 1fr))";
     return;
   }
+  // natural-width columns that share out any extra width the divider is dragged out to (auto tracks
+  // stretch equally); only the turning box stretches into it
   for (const cols of [1, 2, 3]) {
-    tools.style.gridTemplateColumns = `repeat(${cols}, max-content)`;
+    tools.style.gridTemplateColumns = `repeat(${cols}, minmax(max-content, auto))`;
     if (tools.offsetHeight <= pane.clientHeight) break;
   }
+}
+
+/** Drag the divider (or focus it and use the arrow keys) to widen or narrow the tool area. */
+function bindSplitter() {
+  const split = $("splitter"), pane = $("toolsPane");
+  const setWidth = (w) => {
+    const max = Math.max(200, document.querySelector("main").clientWidth - 200);
+    pane.style.width = clamp(w, 200, max) + "px";
+  };
+  let drag = null;
+  split.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    try { split.setPointerCapture(e.pointerId); } catch (_) { /* synthetic events */ }
+    drag = { x: e.clientX, w: pane.offsetWidth };
+  });
+  split.addEventListener("pointermove", (e) => {
+    if (drag) setWidth(drag.w + e.clientX - drag.x);
+  });
+  split.addEventListener("pointerup", () => { drag = null; });
+  split.addEventListener("pointercancel", () => { drag = null; });
+  split.addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    setWidth(pane.offsetWidth + (e.key === "ArrowLeft" ? -16 : 16));
+  });
 }
 
 // ---------- wiring ----------
@@ -735,10 +1297,25 @@ function init() {
     const rect = gridCanvas.getBoundingClientRect();
     return { x: e.clientX - rect.left, y: e.clientY - rect.top };
   }, onGrid);
+  bindPaint(turnCanvas, (e) => {
+    const rect = turnCanvas.getBoundingClientRect();
+    return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+  }, onTurn, { tapTouch: true });
   bindWheelZoom(preview.scroller, zoomBy);
   bindWheelZoom(repeatView.scroller, repeatZoomBy);
+  bindSplitter();
 
   const onEnter = (id, fn) => $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") fn(); });
+  for (const r of document.querySelectorAll('input[name="weave"]')) {
+    r.addEventListener("change", () => {
+      if (S.dirty && !confirm("Switching the type of weaving starts a new, blank pattern. Discard your unsaved changes?")) {
+        document.querySelector(`input[name="weave"][value="${S.weave}"]`).checked = true;
+        return;
+      }
+      S.weave = r.value;
+      onWeaveTypeChange();
+    });
+  }
   $("generateBtn").addEventListener("click", generate);
   onEnter("count", generate);
   $("zoom").addEventListener("input", redraw);
@@ -767,6 +1344,16 @@ function init() {
   $("fullRange").addEventListener("click", selectFullRange);
   $("openRepeat").addEventListener("click", openRepeat);
   onEnter("repeats", openRepeat);
+
+  $("addBlock").addEventListener("click", addTurnBlock);
+  $("dupBlock").addEventListener("click", duplicateTurnBlock);
+  $("bulkF").addEventListener("click", () => bulkTurnBlock("f"));
+  $("bulkB").addEventListener("click", () => bulkTurnBlock("b"));
+  $("bulkEvens").addEventListener("click", () => bulkTurnBlock("evens"));
+  $("bulkOdds").addEventListener("click", () => bulkTurnBlock("odds"));
+  $("traceGo").addEventListener("click", openTraceFromEntry);
+  onEnter("traceNum", openTraceFromEntry);
+  $("traceClose").addEventListener("click", () => traceDlg.close());
 
   $("rUpdate").addEventListener("click", repeatRedraw);
   onEnter("rCount", repeatRedraw);
@@ -823,10 +1410,11 @@ function init() {
   });
   for (const id of ["previewPane", "gridWrap", "toolsPane", "repeatPane"]) ro.observe($(id));
 
+  // a reload can restore form state; start from the inkle defaults the state above describes
+  document.querySelector('input[name="weave"][value="inkle"]').checked = true;
   setColor(S.color);
   updateUndoButtons();
-  arrangeTools();
-  refresh();
+  onWeaveTypeChange(false);
 }
 
 init();
