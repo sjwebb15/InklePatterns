@@ -6,12 +6,17 @@ straps and trim. You set up the warp threads, color them, add pick-up
 threads, and see a preview of the woven band. You can also preview a section
 of the pattern repeated down the length of the band.
 
-There are two versions, and they work the same way:
+The Windows program also designs tablet (card) woven bands: you thread the
+cards, set the turning sequence, and see the band that results (section 13).
+
+There are two versions:
   - A Windows program (InklePatterns.exe).
   - A web version that runs in any modern browser, with nothing to install:
     https://sjwebb15.github.io/InklePatterns/
-Pattern files (.inkl) made in one open in the other. This manual describes
-both. Section 15 lists the few differences in the web version.
+Both do inkle weaving the same way, and inkle pattern files (.inkl) made in
+one open in the other. Tablet weaving is in the Windows program only, for
+now. This manual describes both. Section 16 lists the differences in the web
+version.
 
 
 CONTENTS
@@ -28,9 +33,10 @@ CONTENTS
  10. Repeat preview
  11. Undo and redo
  12. Saving and opening patterns
- 13. Quick reference
- 14. Things to be aware of
- 15. The web version
+ 13. Tablet (card) weaving
+ 14. Quick reference
+ 15. Things to be aware of
+ 16. The web version
 
 
 1. STARTING THE PROGRAM
@@ -59,12 +65,19 @@ The window has three areas:
     scroll to reach a control.
   - Bottom right: the pattern preview, showing how the woven band will look.
 
-You can resize the window freely. The File menu at the top holds Open, Save
-and Save As.
+You can resize the window freely. To give the tool boxes more or less room,
+drag the divider between them and the preview. The File menu at the top
+holds Open, Save and Save As.
+
+This section and sections 3 to 10 describe inkle weaving. In tablet weaving
+the grid, tool boxes and preview change; see section 13.
 
 
 3. WARP THREADS
 ---------------
+At the top of the "Warp threads" box, choose the type of weaving: "Inkle
+(pick-up)" (the default) or "Tablet (cards)" (see section 13).
+
 In the "Warp threads" box, type the number of warp threads (1 to 200) and
 click Generate, or press Enter. A blank pattern appears with every thread
 uncolored (white).
@@ -268,12 +281,15 @@ What counts as one step:
     once.
   - Clicking Generate. Undo brings back the previous pattern and its thread
     count.
+  - In tablet weaving: painting or erasing holes, switching a tablet between
+    S and Z, and every change to the turning sequence (cells, repeat counts,
+    adding or deleting blocks, flips, and the bulk buttons).
 
 Not undone: palette changes, zoom, rotation, and the repeat-row selection.
 These don't change the pattern itself.
 
-Making a new change after undoing clears the redo history. Opening a file
-clears all undo history.
+Making a new change after undoing clears the redo history. Opening a file,
+or switching between inkle and tablet weaving, clears all undo history.
 
 
 12. SAVING AND OPENING PATTERNS
@@ -285,15 +301,109 @@ Patterns are saved as .inkl files. Use the File menu:
   - Save As... (Ctrl+Shift+S): saves under a new name or location.
   - Open... (Ctrl+O): loads a saved pattern.
 
-A saved pattern includes the number of threads, every thread's color, all
-pick-ups, and the selected repeat rows. The current file's name appears in
-the window title.
+A saved inkle pattern includes the number of threads, every thread's color,
+all pick-ups, and the selected repeat rows. A saved tablet pattern includes
+the number of tablets, the color in every hole, each tablet's S/Z threading,
+and the whole turning sequence, including flips. Opening a file switches to
+the right type of weaving by itself. The current file's name appears in the
+window title.
 
 If a file is damaged or isn't an inkle pattern, the program shows an error
 message and leaves your current pattern unchanged.
 
 
-13. QUICK REFERENCE
+13. TABLET (CARD) WEAVING
+-------------------------
+In tablet weaving, each card (tablet) carries four threads, one through each
+of its holes, labeled A, B, C and D. The color that shows on the band at each
+pick depends on how far the card has been turned. So in this mode you don't
+paint the preview. You set up the threading and the turning sequence, and
+the program works out how the band will look.
+
+Starting a tablet pattern
+  - In the "Warp threads" box, choose "Tablet (cards)". The box is renamed
+    "Tablets".
+  - Type the number of tablets (1 to 200) and click Generate, or press
+    Enter.
+  - The new pattern has every hole white, the tablets threaded S, Z, S, Z...
+    (tablet 1 is S), and a turning sequence of 4 picks forward then 4
+    backward.
+  - Switching between inkle and tablet weaving starts a new, blank pattern.
+    Save your work first; the switch can't be undone.
+
+In tablet mode, the Tool and Repeat preview boxes are hidden and a Turning
+sequence box appears. Rotate 90° is not available.
+
+The threading grid
+The grid at the top has one column per tablet, tablet 1 at the left, and
+five rows:
+  - A, B, C, D: the thread color in each hole. Left-click (or drag) to
+    paint holes with the current color. Right-click (or drag) to erase them
+    to white.
+  - S/Z: how the tablet is threaded. Click a tablet's S/Z cell to switch it
+    between S and Z. This works one click at a time, not by dragging.
+
+The turning sequence
+The Turning sequence box holds the sequence as a list of blocks. Each block
+is one row. It says, for every tablet, whether that tablet turns forward
+(F), turns backward (B) or stays still (idle, shown blank), and how many
+picks the block lasts. The blocks run from top to bottom, then the whole
+sequence starts again from the top. The numbers across the top row are the
+tablet numbers.
+
+  - Left-click a cell to switch it between F and B. Drag along a row to set
+    several cells. The first cell you press decides whether the drag makes
+    them F or B.
+  - Right-click (or right-drag) a cell to make it idle.
+  - The number at the left of each row (for example "4×") is how many picks
+    the block lasts. Left-click it to add one, right-click to take one away.
+  - Click the red × at the left of a row to delete that block. The last
+    remaining block can't be deleted.
+  - "+ Add block" adds a block at the bottom: every tablet forward, 4
+    picks.
+  - "Duplicate last" adds a copy of the bottom block. A common way to build
+    a sequence is to duplicate a block, then change a few tablets.
+  - The block you clicked last is the selected block, shaded blue. The
+    buttons under "Selected block" change it all at once: "All F", "All B",
+    "Evens → B" (tablets 2, 4, 6... turn backward; others are unchanged)
+    and "Odds → B" (tablets 1, 3, 5... turn backward; others unchanged).
+  - If there are more tablets than fit, use the scrollbar under the grid, or
+    drag the divider between the tool boxes and the preview to make the tool
+    area wider.
+
+Flipping cards
+To turn a card over partway through, which swaps it between S and Z without
+re-threading, hold Shift and click that tablet's cell in a block. The card
+flips at the start of that block. A small pink triangle in the cell's corner
+marks the flip; Shift+click again to remove it.
+Because the sequence repeats, the flip happens every time that block comes
+round. A card flipped in a repeating block flips back and forth each time
+through the sequence.
+
+The preview
+  - Each row of the preview is one pick, with pick 1 at the top. Each
+    tablet shows as a tilted oval in the color of the thread showing at that
+    pick.
+  - The tilt shows which way the twist leans. It depends on the tablet's
+    S/Z threading and on whether it is turning forward or backward.
+  - When a tablet changes direction, the same thread shows for two picks in
+    a row, just as it does on the loom. An idle tablet looks the same as it
+    did on the pick before.
+  - The turning sequence repeats down the preview to fill the window, so
+    there is no separate repeat preview in tablet mode.
+  - The preview is for viewing only; clicking it does nothing. Zoom works
+    the same as in inkle mode (section 9).
+
+Tracing one tablet
+To check a tablet pick by pick, for example against a chart or a woven
+sample, click its number in the top row of the turning sequence, or type
+the number into "Trace tablet #" and click Go (or press Enter). A small
+window lists that tablet's first 32 picks: the turn (F, B or I for idle),
+which hole is showing, its color, and whether the card is S or Z at that
+pick. The trace is a snapshot: if you change the pattern, open it again.
+
+
+14. QUICK REFERENCE
 -------------------
 Preview (Tool = Color thread)
   Left-click / drag ............ color thread(s) with the current color
@@ -313,6 +423,19 @@ H/U grid (Tool = Color thread only)
   Left-click / drag ............ color thread(s)
   Right-click / drag ........... erase thread(s)
 
+Threading grid (tablet weaving)
+  Left-click / drag on A-D ..... paint holes with the current color
+  Right-click / drag on A-D .... erase holes
+  Left-click on S/Z ............ switch the tablet between S and Z
+
+Turning sequence (tablet weaving)
+  Left-click / drag a cell ..... switch between F and B
+  Right-click / drag a cell .... make idle
+  Shift + left-click a cell .... flip the card at that block (or undo it)
+  Left / right-click "4×" ...... one more / one fewer pick in the block
+  Click × ...................... delete the block
+  Click a tablet number ........ open that tablet's trace
+
 Preset swatches
   Left-click ................... make it the current color
   Right-click .................. replace it with the current color
@@ -323,19 +446,20 @@ Keyboard
   Ctrl+O / Ctrl+S / Ctrl+Shift+S  Open / Save / Save As
 
 
-14. THINGS TO BE AWARE OF
+15. THINGS TO BE AWARE OF
 -------------------------
-  - The program does not warn about unsaved changes. Closing the window or
-    opening another file discards any unsaved work, and that can't be
-    undone.
+  - The program does not warn about unsaved changes. Closing the window,
+    opening another file, or switching between inkle and tablet weaving
+    discards any unsaved work, and that can't be undone.
   - Generate always starts a blank pattern, even if the thread count hasn't
     changed. You can undo it with Ctrl+Z.
 
 
-15. THE WEB VERSION
+16. THE WEB VERSION
 -------------------
-The web version has the same controls as the Windows program, with these
-differences:
+The web version has the same controls as the Windows program for inkle
+weaving, with the differences below. It does not have tablet weaving yet,
+and it shows an error if you open a tablet pattern file in it.
 
 Saving and opening
   - In Chrome and Edge, Save and Open work like a desktop program: you
