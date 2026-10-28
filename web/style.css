@@ -42,8 +42,15 @@ body {
 
 /* tools on the left, a draggable divider, preview filling the rest */
 main { flex: 1; display: flex; min-height: 0; }
-#toolsPane { flex: none; overflow: auto; }
-#tools { display: grid; gap: 12px; padding: 12px; align-items: start; }
+#toolsPane { flex: none; overflow: auto; max-width: calc(100% - 126px); } /* leave the preview some room */
+/* boxes flow into 1-3 column stacks (arrangeTools); each column has its own width (natural, or
+   set by dragging the divider after it) and its boxes fill that width */
+#tools { display: flex; padding: 12px; align-items: stretch; }
+.toolcol { flex: none; display: flex; flex-direction: column; align-items: stretch; gap: 12px; }
+.toolcol[hidden], .coldiv[hidden] { display: none; }
+.coldiv { flex: none; width: 13px; margin: 0 -1px; cursor: col-resize; touch-action: none; position: relative; }
+.coldiv::after { content: ""; position: absolute; left: 6px; top: 0; bottom: 0; width: 1px; background: var(--border); }
+.coldiv:hover::after { background: var(--accent); }
 #splitter {
   flex: none;
   width: 6px;
@@ -57,13 +64,17 @@ main { flex: 1; display: flex; min-height: 0; }
 #previewPane { flex: 1; min-width: 0; background: var(--canvas); }
 
 .box {
-  justify-self: start; /* natural size; only the turning-sequence box stretches into extra width */
+  position: relative; /* for the resize grip */
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 10px 12px 12px;
 }
+.box[hidden] { display: none !important; }
 .box h2 {
+  cursor: grab; /* drag a box by its title to move it */
+  touch-action: none;
+  user-select: none;
   margin: 0 0 8px;
   font-size: 12px;
   font-weight: 600;
@@ -77,6 +88,8 @@ main { flex: 1; display: flex; min-height: 0; }
 .undo-row { margin-top: 10px; }
 .hint { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
 .desc { margin: 0; }
+/* help text re-wraps to its box's width and never makes the box wider */
+.hint, .desc { width: 0; min-width: 100%; }
 
 /* controls */
 button {
@@ -103,14 +116,17 @@ input[type=number] {
   border-radius: 6px;
   background: #FFFFFF;
 }
-#rangeStart, #rangeEnd, #traceNum { width: 56px; }
+#rangeStart, #rangeEnd, #traceNum, #addCount { width: 56px; }
 input[type=range] { accent-color: var(--accent); width: 120px; }
+#zoom, .slider-row input { flex: 1 1 auto; } /* sliders stretch with the box */
 input[type=radio], input[type=checkbox] { accent-color: var(--accent); margin: 0; }
 .check { display: flex; align-items: center; gap: 7px; margin: 4px 0; cursor: pointer; user-select: none; }
 .eraser { margin-top: 8px; }
 
 /* palette */
-#palette { display: grid; grid-template-columns: repeat(10, 22px); gap: 3px; }
+/* the swatches re-wrap to the box's width: a wider box gives more columns and fewer rows
+   (5 columns at its natural width) */
+#palette { display: grid; grid-template-columns: repeat(auto-fill, 22px); gap: 3px; width: 122px; min-width: 100%; max-width: 100%; }
 .swatch { width: 22px; height: 22px; padding: 0; border: 1px solid #9AA0A6; border-radius: 3px; }
 .swatch:hover:not(:disabled) { filter: brightness(0.95); }
 .swatch.selected { outline: 2px solid var(--accent); outline-offset: 1px; }
@@ -122,9 +138,27 @@ input[type=radio], input[type=checkbox] { accent-color: var(--accent); margin: 0
 #curSwatch { width: 44px; height: 28px; border: 1px solid var(--border); border-radius: 4px; }
 .hex { margin-left: 6px; font-variant-numeric: tabular-nums; }
 
-/* turning sequence: the grid scrolls inside the box rather than widening it */
-#turnBox { justify-self: stretch; min-width: 380px; }
-#turnScroll { width: 0; min-width: 100%; overflow-x: auto; margin: 6px 0; }
+/* resize grip (bottom-right of each box) and the drop marker shown while moving a box */
+.grip {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  width: 12px;
+  height: 12px;
+  cursor: nwse-resize;
+  touch-action: none;
+  background: linear-gradient(135deg, transparent 50%, #9AA0A6 50%, #9AA0A6 60%, transparent 60%,
+                              transparent 75%, #9AA0A6 75%, #9AA0A6 85%, transparent 85%);
+}
+.box.dragging { opacity: 0.5; }
+#dropMark { position: fixed; height: 3px; background: var(--accent); pointer-events: none; z-index: 10; }
+
+/* turning sequence: the grid's cells stay a fixed size; its area fills the box (380 px wide at the
+   box's natural width) and scrolls whichever way it doesn't fit, taking up (or giving back) height
+   when the box is resized */
+#turnBox { display: flex; flex-direction: column; }
+#turnBox > * { flex-shrink: 0; }
+#turnScroll { flex: 1 1 auto; min-height: 0; width: 380px; min-width: 100%; max-width: 100%; overflow: auto; margin: 6px 0; }
 #turnCanvas { display: block; touch-action: pan-x pan-y; }
 button.bulk { min-width: 100px; }
 
@@ -167,8 +201,9 @@ button.bulk { min-width: 100px; }
   .filebtns { margin-left: 0; }
   main { flex-direction: column; }
   #toolsPane { width: auto !important; overflow: visible; border-bottom: 1px solid var(--border); }
-  #splitter { display: none; }
-  .box { justify-self: stretch; }
-  #turnBox { min-width: 0; }
+  #splitter, .coldiv { display: none; }
+  .toolcol { flex: 1 1 auto; width: auto !important; }
+  .grip, #resetLayout { display: none; }
+  .box h2 { cursor: default; touch-action: auto; }
   #previewPane { flex: none; height: 75vh; }
 }

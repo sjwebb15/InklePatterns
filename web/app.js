@@ -28,7 +28,10 @@ const TABLET_HOLES = "ABCD"; // a tablet's four holes, clockwise on its front fa
 const TABLET_TILT_DEG = 21; // lean angle of each tablet's oval, off vertical
 const TABLET_FILL = 1.25; // how much of its own cell each oval occupies; >1 lets neighbors overlap
 const TURN_CELL_W = 18; // width of one tablet's F/B cell in the turning-sequence editor
-const TURN_LABEL_W = 56; // width of the repeats/delete control area at the left of each block row
+const TURN_LABEL_W = 84; // width of the row-number/delete/repeats area at the left of each block row
+const TURN_NUM_W = 26; // the row number's part of that area; the delete "x" is in the next TURN_DEL_W px
+const TURN_DEL_W = 20;
+const TABLET_NUM_H = 18; // height of the tablet-number row above the threading grid's hole rows
 const TRACE_ROWS = 32;
 const FONT = "'Segoe UI', system-ui, sans-serif";
 
@@ -133,30 +136,40 @@ function turnBlockEntryAt(blocks, pick) {
  *  tablet did to get there, and its current threading. The single source of truth for both the
  *  preview and the trace, so they can't diverge.
  *  Hole order is the same for every tablet whatever its S/Z threading (S/Z only changes the lean):
- *  a forward turn steps A->D->C->B->A, a backward turn the other way. A turn opposite to the
- *  tablet's previous one (a reversal) repeats the same hole for that pick. Idle picks change nothing
- *  and don't count as the previous turn. A block's `flips` turn a card over (S<->Z) each time that
- *  block is reached. */
+ *  from home, forward turns show A, B, C, D, A...; backward turns show D, C, B, A, D... (matches
+ *  published drafts). `rot` counts quarter turns: a forward pick shows hole `rot` then advances, a
+ *  backward pick steps back then shows it, so a reversal repeats the previous pick's hole. Idle
+ *  picks change nothing. A block's `flips` turn a card over (S<->Z) each time that block is
+ *  reached. */
 function* tabletHoleTrace(blocks, tablet, rows, homeIsZ) {
-  let idx = 0;
-  let lastDir = null; // last non-idle direction ("F" or "B"), ignoring idle picks entirely
+  let rot = 0, idx = 0;
   let isZNow = homeIsZ;
   for (let pick = 1; pick <= rows; pick++) {
     const [block, isEntry] = turnBlockEntryAt(blocks, pick);
     if (isEntry && block && block.flips && block.flips[tablet]) isZNow = !isZNow;
     const state = turnStateAt(blocks, tablet, pick);
-    if (state !== "I") {
-      if (lastDir === null || state === lastDir) idx = (idx + (state === "F" ? 3 : 1)) % 4;
-      // else: reversal -- idx repeats the previous pick's hole, no advance
-      lastDir = state;
+    if (state === "F") {
+      idx = ((rot % 4) + 4) % 4;
+      rot++;
+    } else if (state === "B") {
+      rot--;
+      idx = ((rot % 4) + 4) % 4;
     }
     yield [pick, state, idx, isZNow];
   }
 }
 
+/** Label every tablet if the numbers fit their columns, else every 2nd, 5th, 10th... one. */
+function tabletLabelStep(cellW, n) {
+  const need = String(n).length * 7 + 4;
+  for (const step of [1, 2, 5, 10, 20, 50, 100]) if (cellW * step >= need) return step;
+  return 100;
+}
+
 /** Draw the woven band: one tilted oval per tablet per pick, each centered in its own cell with no
- *  dependency on its neighbors. Only tablets cFrom..cTo are drawn (the visible ones). */
-function drawTabletBand(ctx, colors, isZ, blocks, x0, y0, cellW, cellH, rows, cFrom = 0, cTo = colors.length - 1) {
+ *  dependency on its neighbors. Pick 1 sits at `yBottom` and later picks stack upward, the way a
+ *  band is woven and a draft is read. Only tablets cFrom..cTo are drawn (the visible ones). */
+function drawTabletBand(ctx, colors, isZ, blocks, x0, yBottom, cellW, cellH, rows, cFrom = 0, cTo = colors.length - 1) {
   const halfLong = cellH / 2 * TABLET_FILL;
   const halfShort = cellW / 2 * TABLET_FILL * 0.85;
   const tilt = TABLET_TILT_DEG * Math.PI / 180;
@@ -167,7 +180,7 @@ function drawTabletBand(ctx, colors, isZ, blocks, x0, y0, cellW, cellH, rows, cF
     let angle = tabletLean(isZ[col], false) ? tilt : -tilt; // lean before this tablet ever turns
     for (const [pick, state, idx, isZNow] of tabletHoleTrace(blocks, col, rows, isZ[col])) {
       if (state !== "I") angle = tabletLean(isZNow, state === "B") ? tilt : -tilt; // idle: nothing moves
-      const cy = y0 + (pick - 0.5) * cellH;
+      const cy = yBottom - (pick - 0.5) * cellH;
       ctx.beginPath();
       ctx.ellipse(cx, cy, halfShort, halfLong, angle, 0, 2 * Math.PI);
       ctx.fillStyle = colors[col][idx] || EMPTY;
@@ -444,7 +457,8 @@ function generate() {
   }
   S.dirty = had;
   refresh();
-  if (!tablet) selectFullRange();
+  if (tablet) turnScrollToBottom(); // bottom-up: start with block 1 in view
+  else selectFullRange();
 }
 
 /** Switch the tool boxes, grid and preview between inkle pick-up and tablet card weaving. */
@@ -476,8 +490,9 @@ function onWeaveTypeChange(reset = true) {
     updateTitle();
   }
   preview.scroller.scrollTo(0, 0);
-  arrangeTools();
+  arrangeTools(); // shows the boxes for this type of weaving
   refresh();
+  turnScrollToBottom();
 }
 
 function selectFullRange() {
@@ -520,7 +535,7 @@ function zoomBy(d) {
 const gridCanvas = $("gridCanvas");
 
 function gridHeight() {
-  return PAD * 2 + (isTablet() ? TABLET_HOLES.length + 1 : 2) * CELL;
+  return isTablet() ? PAD * 2 + TABLET_NUM_H + (TABLET_HOLES.length + 1) * CELL : PAD * 2 + 2 * CELL;
 }
 
 /** Width of one grid column: shrinks or grows so the whole grid always fits, no scrolling needed. */
@@ -564,22 +579,27 @@ function drawInkleGrid(ctx) {
   });
 }
 
-/** Four hole rows (A-D, paintable) plus an S/Z row (click to flip a tablet's threading). */
+/** Tablet numbers (left to right), four hole rows (A-D, paintable), and an S/Z row (click to flip
+ *  a tablet's threading). */
 function drawTabletGrid(ctx) {
   const n = S.tabletColors.length;
   if (!n) return;
-  const gcell = gridCellWidth(n), x0 = PAD + LABEL_W;
+  const gcell = gridCellWidth(n), x0 = PAD + LABEL_W, top = PAD + TABLET_NUM_H;
+  const step = tabletLabelStep(gcell, n);
+  ctx.font = "11px " + FONT;
+  ctx.fillStyle = "#1B1B1F";
+  for (let i = step - 1; i < n; i += step) ctx.fillText(String(i + 1), x0 + (i + 0.5) * gcell, PAD + TABLET_NUM_H / 2);
   ctx.font = "bold 15px " + FONT;
   [...TABLET_HOLES].forEach((lab, r) => {
     ctx.fillStyle = "#1B1B1F";
-    ctx.fillText(lab, PAD + LABEL_W / 2, PAD + r * CELL + CELL / 2);
+    ctx.fillText(lab, PAD + LABEL_W / 2, top + r * CELL + CELL / 2);
     for (let i = 0; i < n; i++) {
       ctx.fillStyle = S.tabletColors[i][r] || EMPTY;
-      ctx.fillRect(x0 + i * gcell, PAD + r * CELL, gcell, CELL);
-      ctx.strokeRect(x0 + i * gcell, PAD + r * CELL, gcell, CELL);
+      ctx.fillRect(x0 + i * gcell, top + r * CELL, gcell, CELL);
+      ctx.strokeRect(x0 + i * gcell, top + r * CELL, gcell, CELL);
     }
   });
-  const szRow = TABLET_HOLES.length, y = PAD + szRow * CELL;
+  const szRow = TABLET_HOLES.length, y = top + szRow * CELL;
   ctx.font = "bold 12px " + FONT;
   ctx.fillStyle = "#1B1B1F";
   ctx.fillText("S/Z", PAD + LABEL_W / 2, y + CELL / 2);
@@ -622,13 +642,13 @@ function redrawTablet() {
     preview.render();
     return;
   }
-  const x0 = PAD + LABEL_W, y0 = PAD;
-  const availH = Math.max(h - y0 - PAD, 1);
+  const x0 = PAD + LABEL_W, yBottom = h - PAD; // pick 1 at the bottom, woven upward
+  const availH = Math.max(h - 2 * PAD, 1);
   const cellW = zoomLevel() * 2;
   const cellH = Math.round(cellW * 1.8);
   const rows = Math.max(4, Math.floor(availH / cellH));
   S.visibleRows = rows;
-  S.geom = { x0, y0, cellW, cellH, rows };
+  S.geom = { x0, yBottom, cellW, cellH, rows };
   preview.setContentSize(Math.max(x0 + n * cellW + PAD, w), h);
   preview.render();
 }
@@ -670,10 +690,10 @@ function drawPreview(ctx, sx, sy, vw, vh) {
     return;
   }
   if (isTablet()) {
-    const { x0, y0, cellW, cellH, rows } = S.geom;
+    const { x0, yBottom, cellW, cellH, rows } = S.geom;
     // draw only the tablets in view, plus one each side whose ovals overlap into it
     const cFrom = Math.floor((sx - x0) / cellW) - 1, cTo = Math.ceil((sx + vw - x0) / cellW) + 1;
-    drawTabletBand(ctx, S.tabletColors, S.tabletSz, S.turnBlocks, x0, y0, cellW, cellH, rows, cFrom, cTo);
+    drawTabletBand(ctx, S.tabletColors, S.tabletSz, S.turnBlocks, x0, yBottom, cellW, cellH, rows, cFrom, cTo);
     return;
   }
   const { hw, a, spacing, rows, acrossOrigin, alongOrigin } = S.geom;
@@ -762,10 +782,10 @@ function onTabletGrid(pt, erase, press) {
   const n = S.tabletColors.length;
   if (!n) return;
   if (press) S.strokeSaved = false;
-  const x0 = PAD + LABEL_W;
-  if (pt.x < x0 || pt.y < PAD) return;
+  const x0 = PAD + LABEL_W, top = PAD + TABLET_NUM_H;
+  if (pt.x < x0 || pt.y < top) return;
   const i = Math.floor((pt.x - x0) / gridCellWidth(n));
-  const row = Math.floor((pt.y - PAD) / CELL);
+  const row = Math.floor((pt.y - top) / CELL);
   if (i < 0 || i >= n || row < 0 || row > TABLET_HOLES.length) return;
   if (row === TABLET_HOLES.length) { // S/Z row: a left-click press flips the tablet's threading
     if (press && !erase) {
@@ -816,13 +836,14 @@ function refresh() {
 
 const turnCanvas = $("turnCanvas");
 
+/** Classic 4F/4B, one row per pick like a printed draft. */
 function defaultTurnBlocks(n) {
-  return [{ pattern: new Array(n).fill("F"), repeats: 4, flips: new Array(n).fill(false) },
-          { pattern: new Array(n).fill("B"), repeats: 4, flips: new Array(n).fill(false) }];
+  return [..."FFFFBBBB"].map((d) => ({ pattern: new Array(n).fill(d), repeats: 1, flips: new Array(n).fill(false) }));
 }
 
-/** A header of tablet numbers, then one row per block: delete and repeat-count controls on the
- *  left, that block's per-tablet F/B/idle cells after. */
+/** Drawn bottom-up, the way drafts are read: the first block is the bottom row and later blocks
+ *  stack above it, with a row of tablet numbers underneath. Each block row has its delete and
+ *  repeat-count controls on the left, then its per-tablet F/B/idle cells. */
 function drawTurnBlocks() {
   const n = S.tabletColors.length, blocks = S.turnBlocks;
   const h = (blocks.length + 1) * CELL;
@@ -836,22 +857,30 @@ function drawTurnBlocks() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.fillStyle = CANVAS_BG;
   ctx.fillRect(0, 0, contentW, h);
+  anchorTurnScroll();
   if (!n || !blocks.length) return;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.font = "11px " + FONT;
   ctx.fillStyle = "#1B1B1F";
-  for (let i = 0; i < n; i++) ctx.fillText(String(i + 1), TURN_LABEL_W + (i + 0.5) * TURN_CELL_W, CELL / 2);
+  for (let i = 0; i < n; i++) {
+    ctx.fillText(String(i + 1), TURN_LABEL_W + (i + 0.5) * TURN_CELL_W, blocks.length * CELL + CELL / 2);
+  }
   const fills = { F: "#C9A227", B: "#5B6B8C", I: CANVAS_BG };
   ctx.strokeStyle = LINE;
   ctx.lineWidth = 1;
   blocks.forEach((b, bi) => {
-    const y0 = (bi + 1) * CELL;
+    const y0 = (blocks.length - 1 - bi) * CELL;
     ctx.fillStyle = bi === S.activeTurnBlock ? "#E7EEF8" : CANVAS_BG;
     ctx.fillRect(0, y0, contentW, CELL);
+    ctx.font = "11px " + FONT; // row number, counting up from 1 at the bottom
+    ctx.fillStyle = "#6B6F76";
+    ctx.textAlign = "right";
+    ctx.fillText(String(bi + 1), TURN_NUM_W - 4, y0 + CELL / 2);
+    ctx.textAlign = "center";
     ctx.font = "bold 13px " + FONT;
     ctx.fillStyle = "#A33333";
-    ctx.fillText("×", 14, y0 + CELL / 2);
+    ctx.fillText("×", TURN_NUM_W + TURN_DEL_W / 2, y0 + CELL / 2);
     ctx.font = "12px " + FONT;
     ctx.fillStyle = "#1B1B1F";
     ctx.fillText(b.repeats + "×", TURN_LABEL_W - 16, y0 + CELL / 2);
@@ -883,16 +912,17 @@ function onTurn(pt, erase, press, shift) {
   if (!S.turnBlocks.length || !S.tabletColors.length) return;
   if (press) S.strokeSaved = false;
   const { x, y } = pt, n = S.tabletColors.length;
-  const row = Math.floor(y / CELL);
-  if (row === 0) { // header row: click a tablet's number to trace it
+  const row = Math.floor(y / CELL); // counted from the top; blocks are drawn bottom-up
+  const nb = S.turnBlocks.length;
+  if (row === nb) { // number row under the blocks: click a tablet's number to trace it
     if (press && x >= TURN_LABEL_W) {
       const tablet = Math.floor((x - TURN_LABEL_W) / TURN_CELL_W);
       if (tablet >= 0 && tablet < n) openTabletTrace(tablet);
     }
     return;
   }
-  const blockIdx = row - 1;
-  if (blockIdx < 0 || blockIdx >= S.turnBlocks.length) return;
+  if (row < 0 || row >= nb) return;
+  const blockIdx = nb - 1 - row;
   if (x < TURN_LABEL_W) {
     if (press) onTurnLabel(blockIdx, x, erase);
     return;
@@ -930,7 +960,8 @@ function onTurn(pt, erase, press, shift) {
 }
 
 function onTurnLabel(blockIdx, x, erase) {
-  if (x < 24) { // delete glyph
+  if (x < TURN_NUM_W) return; // the row number itself does nothing
+  if (x < TURN_NUM_W + TURN_DEL_W) { // delete glyph
     if (S.turnBlocks.length > 1 && !erase) {
       checkpoint();
       S.turnBlocks.splice(blockIdx, 1);
@@ -948,12 +979,20 @@ function onTurnLabel(blockIdx, x, erase) {
   redraw();
 }
 
+/** Add the number of rows in the "+ Add ... rows" box on top: all forward, 1x each (one undo step). */
 function addTurnBlock() {
   const n = S.tabletColors.length;
   if (!n) return;
+  const count = parseWhole($("addCount").value);
+  if (!(count >= 1 && count <= 200)) {
+    alert("Enter a whole number of rows to add, between 1 and 200.");
+    return;
+  }
   pushUndo();
   S.dirty = true;
-  S.turnBlocks.push({ pattern: new Array(n).fill("F"), repeats: 4, flips: new Array(n).fill(false) });
+  for (let i = 0; i < count; i++) {
+    S.turnBlocks.push({ pattern: new Array(n).fill("F"), repeats: 1, flips: new Array(n).fill(false) });
+  }
   S.activeTurnBlock = S.turnBlocks.length - 1;
   drawTurnBlocks();
   redraw();
@@ -1236,6 +1275,8 @@ function loadPattern(text, name, handle = null) {
   refresh();
   if (fileMode === "inkle") {
     if (rng) setRange(rng[0], rng[1]); else selectFullRange();
+  } else {
+    turnScrollToBottom();
   }
 }
 
@@ -1244,54 +1285,361 @@ function updateTitle() {
   document.title = S.fileName ? `${S.fileName} - Inkle Pattern Generator` : "Inkle Pattern Generator";
 }
 
-// ---------- tool box layout ----------
+// ---------- tool-box layout: flowing columns, drag to reorder, resizable boxes and columns (same as inkle.py) ----------
 
 const narrow = window.matchMedia("(max-width: 700px)");
+const LAYOUT_KEY = "inklePatterns.layout";
+const TOOL_KEYS = ["warp", "zoom", "preset", "color", "tool", "repeat", "turn"]; // default tool-box order
+const BOX_ID = { warp: "warpBox", zoom: "zoomBox", preset: "presetBox", color: "colorBox", tool: "toolBox",
+                 repeat: "repeatBox", turn: "turnBox" };
+const TOOL_GAP = 12; // space between boxes and around the columns (matches the CSS)
+const TURN_MIN_W = 240; // the turning-sequence box can be narrower than its natural size (its grid scrolls)
+let L = loadLayout(); // tool-box order, heights, and widths
+let toolColumns = null; // current arrangement: [[key, ...], ...]
+let flowAvailH = null; // panel height the current flow was worked out for
+let resizingBox = false;
 
-/** Reflow the tool boxes into the fewest columns (1-3) whose height fits the window without scrolling. */
-function arrangeTools() {
-  const tools = $("tools"), pane = $("toolsPane");
-  if (narrow.matches) {
-    tools.style.gridTemplateColumns = "repeat(auto-fill, minmax(280px, 1fr))";
-    return;
-  }
-  // natural-width columns that share out any extra width the divider is dragged out to (auto tracks
-  // stretch equally); only the turning box stretches into it
-  for (const cols of [1, 2, 3]) {
-    tools.style.gridTemplateColumns = `repeat(${cols}, minmax(max-content, auto))`;
-    if (tools.offsetHeight <= pane.clientHeight) break;
-  }
+/** Split boxes (given by height, in order) into columns the way text flows: fill a column top to
+ *  bottom, start the next when the next box won't fit, up to maxCols (the last one takes any
+ *  overflow). Gives the fewest columns that fit, and keeps a dropped box where it was dropped. */
+function flowColumns(heights, avail, maxCols = 3) {
+  const cols = [[]];
+  let used = 0;
+  heights.forEach((h, i) => {
+    if (cols[cols.length - 1].length && used + h > avail && cols.length < maxCols) {
+      cols.push([]);
+      used = 0;
+    }
+    cols[cols.length - 1].push(i);
+    used += h;
+  });
+  return cols;
 }
 
-/** Drag the divider (or focus it and use the arrow keys) to widen or narrow the tool area. */
-function bindSplitter() {
-  const split = $("splitter"), pane = $("toolsPane");
-  const setWidth = (w) => {
-    const max = Math.max(200, document.querySelector("main").clientWidth - 200);
-    pane.style.width = clamp(w, 200, max) + "px";
+function defaultLayout() {
+  return { order: TOOL_KEYS.slice(), heights: {}, widths: {} };
+}
+
+function loadLayout() {
+  const layout = defaultLayout();
+  let d;
+  try { d = JSON.parse(localStorage.getItem(LAYOUT_KEY)); } catch (_) { return layout; }
+  if (!d || typeof d !== "object") return layout;
+  const valid = (n) => Number.isInteger(n) && n > 0 && n < 10000;
+  if (Array.isArray(d.order)) {
+    const order = [...new Set(d.order.filter((k) => TOOL_KEYS.includes(k)))];
+    layout.order = order.concat(TOOL_KEYS.filter((k) => !order.includes(k))); // boxes added since
+  }
+  for (const field of ["heights", "widths"]) {
+    if (d[field] && typeof d[field] === "object") {
+      for (const [k, v] of Object.entries(d[field])) if (TOOL_KEYS.includes(k) && valid(v)) layout[field][k] = v;
+    }
+  }
+  return layout;
+}
+
+function saveLayout() {
+  try { localStorage.setItem(LAYOUT_KEY, JSON.stringify(L)); } catch (_) { /* not persisted */ }
+}
+
+function resetLayout() {
+  L = defaultLayout();
+  saveLayout();
+  arrangeTools(true);
+}
+
+const toolCols = () => [...document.querySelectorAll(".toolcol")];
+const colDividers = () => [...document.querySelectorAll(".coldiv")];
+
+/** Flow the visible tool boxes, in the user's order, into the fewest columns (1-3) that fit the
+ *  height. Each column is its own stack with its own width, and its boxes fill that width.
+ *  The flow is sticky: it's worked out afresh only when it has to be (force: a box was moved or the
+ *  layout reset; or the boxes shown or the panel's height changed). Resizing a box or column
+ *  re-wraps text and changes heights, but as long as every column still fits, boxes stay put
+ *  rather than jumping between columns under the pointer. */
+function arrangeTools(force = false) {
+  if (resizingBox) return;
+  const pane = $("toolsPane"), cols = toolCols();
+  for (const k of TOOL_KEYS) applyBoxSize(k);
+  const keys = L.order.filter((k) => !$(BOX_ID[k]).hidden);
+  let columns;
+  if (narrow.matches) {
+    columns = [keys]; // stacked above the preview; the page scrolls
+  } else {
+    const avail = pane.clientHeight - 2 * TOOL_GAP + TOOL_GAP;
+    const h = Object.fromEntries(keys.map((k) => [k, $(BOX_ID[k]).offsetHeight + TOOL_GAP]));
+    const cur = toolColumns;
+    const keep = !force && avail === flowAvailH && cur && cur.flat().join() === keys.join() &&
+      cur.every((col) => col.length === 1 || col.reduce((s, k) => s + h[k], 0) <= avail);
+    flowAvailH = avail;
+    columns = keep ? cur : flowColumns(keys.map((k) => h[k]), avail).map((c) => c.map((i) => keys[i]));
+  }
+  if (force || JSON.stringify(columns) !== JSON.stringify(toolColumns)) {
+    toolColumns = columns;
+    cols.forEach((c, i) => { c.hidden = i >= columns.length; });
+    colDividers().forEach((d, i) => { d.hidden = i >= columns.length - 1; });
+    columns.forEach((col, i) => { for (const k of col) cols[i].appendChild($(BOX_ID[k])); });
+  }
+  sizeToolColumns();
+  anchorTurnScroll(); // moving or resizing boxes can reset the grid's scroll position
+}
+
+/** Natural width of a box: what its contents need (help text re-wraps, so doesn't count). */
+function naturalBoxWidth(key) {
+  const b = $(BOX_ID[key]);
+  b.style.width = "max-content";
+  const w = b.offsetWidth;
+  b.style.width = "";
+  return w;
+}
+
+const minBoxWidth = (key) => (key === "turn" ? TURN_MIN_W : naturalBoxWidth(key));
+
+/** A column's width: as wide as its widest box -- the width the user gave a box, or else its
+ *  natural width -- but never narrower than every box in it allows. Widths belong to the boxes,
+ *  not the columns, so a box keeps its width when it flows into another column. */
+function columnWidth(c) {
+  const keys = (toolColumns || [])[c] || [];
+  if (!keys.length) return 0;
+  const minimum = Math.max(...keys.map(minBoxWidth));
+  const users = keys.filter((k) => L.widths[k]).map((k) => L.widths[k]);
+  return Math.max(minimum, ...(users.length ? users : keys.map(naturalBoxWidth)));
+}
+
+function sizeToolColumns() {
+  toolCols().forEach((col, c) => {
+    col.style.width = narrow.matches || c >= (toolColumns || []).length ? "" : columnWidth(c) + "px";
+  });
+}
+
+/** Give a box the user's height, or let it size to its contents; its width comes from its column.
+ *  Other boxes never get shorter than their contents (the height is a minimum); the turning-
+ *  sequence box can, down to its controls plus a couple of rows, since its grid scrolls. */
+function applyBoxSize(key) {
+  const b = $(BOX_ID[key]), h = narrow.matches ? null : L.heights[key];
+  if (key !== "turn") {
+    b.style.minHeight = h ? h + "px" : "";
+    return;
+  }
+  b.style.height = "";
+  if (h) b.style.height = Math.max(h, minBoxHeight(key)) + "px";
+  anchorTurnScroll(); // keep block 1 in view as the grid area grows or shrinks
+}
+
+/** Shortest a box may be made (measured with the user's height taken off). */
+function minBoxHeight(key) {
+  const b = $(BOX_ID[key]), st = b.style;
+  const saved = [st.height, st.minHeight];
+  st.height = st.minHeight = "";
+  let h = b.offsetHeight;
+  if (key === "turn") h = h - $("turnScroll").offsetHeight + 2 * CELL + 16; // controls + two rows + scrollbar
+  [st.height, st.minHeight] = saved;
+  if (key === "turn") anchorTurnScroll(); // measuring at full height reset the grid's scroll position
+  return h;
+}
+
+const columnOf = (key) => (toolColumns || []).findIndex((col) => col.includes(key));
+
+/** Set column c's width live (while a divider or grip is being dragged), by giving every box in
+ *  it that width. */
+function setColumnWidth(c, w) {
+  w = Math.max(Math.max(...toolColumns[c].map(minBoxWidth)), Math.round(w));
+  for (const k of toolColumns[c]) L.widths[k] = w;
+  sizeToolColumns();
+  anchorTurnScroll();
+}
+
+/** Drag a box by its title to move it: a blue line shows where it will land. */
+function bindBoxDrag(key) {
+  const b = $(BOX_ID[key]), title = b.querySelector("h2");
+  let d = null;
+  title.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0 || narrow.matches) return;
+    e.preventDefault();
+    try { title.setPointerCapture(e.pointerId); } catch (_) { /* synthetic events */ }
+    d = { x: e.clientX, y: e.clientY, moved: false, target: null };
+  });
+  title.addEventListener("pointermove", (e) => {
+    if (!d || (!d.moved && Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) < 5)) return;
+    d.moved = true;
+    b.classList.add("dragging");
+    d.target = boxDropTarget(e.clientX, e.clientY);
+    showDropMark(d.target);
+  });
+  const end = () => {
+    if (!d) return;
+    const { moved, target } = d;
+    d = null;
+    b.classList.remove("dragging");
+    $("dropMark").hidden = true;
+    if (moved && target && target[0] !== key) {
+      const order = L.order.filter((k) => k !== key);
+      order.splice(order.indexOf(target[0]) + (target[1] ? 0 : 1), 0, key);
+      L.order = order;
+      saveLayout();
+      arrangeTools(true);
+    }
   };
-  let drag = null;
-  split.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0) return;
+  title.addEventListener("pointerup", end);
+  title.addEventListener("pointercancel", end);
+}
+
+/** [box key, before?] for a drop at a point: the column nearest the pointer, then the first box in
+ *  it whose middle is below the pointer (else after its last box). */
+function boxDropTarget(x, y) {
+  const cols = toolCols();
+  let best = null;
+  (toolColumns || []).forEach((col, i) => {
+    if (!col.length) return;
+    const r = cols[i].getBoundingClientRect();
+    const dist = x >= r.left && x < r.right ? 0 : Math.min(Math.abs(x - r.left), Math.abs(x - r.right));
+    if (!best || dist < best[0]) best = [dist, col];
+  });
+  if (!best) return null;
+  for (const k of best[1]) {
+    const r = $(BOX_ID[k]).getBoundingClientRect();
+    if (y < r.top + r.height / 2) return [k, true];
+  }
+  return [best[1][best[1].length - 1], false];
+}
+
+function showDropMark(target) {
+  const m = $("dropMark");
+  if (!target) { m.hidden = true; return; }
+  const r = $(BOX_ID[target[0]]).getBoundingClientRect();
+  m.style.left = r.left + "px";
+  m.style.width = r.width + "px";
+  m.style.top = (target[1] ? r.top - TOOL_GAP / 2 - 2 : r.bottom + TOOL_GAP / 2 - 1) + "px";
+  m.hidden = false;
+}
+
+/** Drag a box's corner grip: up/down sets the box's height, left/right its column's width.
+ *  Double-click the grip to give the box back its natural height. */
+function bindGrip(key) {
+  const b = $(BOX_ID[key]), grip = document.createElement("div");
+  grip.className = "grip";
+  grip.title = "Drag to resize (sideways resizes the whole column); double-click to reset the height";
+  b.appendChild(grip);
+  let r = null;
+  grip.addEventListener("pointerdown", (e) => {
+    const c = columnOf(key);
+    if (e.button !== 0 || c < 0) return;
     e.preventDefault();
-    try { split.setPointerCapture(e.pointerId); } catch (_) { /* synthetic events */ }
-    drag = { x: e.clientX, w: pane.offsetWidth };
+    try { grip.setPointerCapture(e.pointerId); } catch (_) { /* synthetic events */ }
+    r = { x: e.clientX, y: e.clientY, col: c, w: columnWidth(c), h: b.offsetHeight };
+    resizingBox = true;
   });
-  split.addEventListener("pointermove", (e) => {
-    if (drag) setWidth(drag.w + e.clientX - drag.x);
+  grip.addEventListener("pointermove", (e) => {
+    if (!r) return;
+    setColumnWidth(r.col, r.w + e.clientX - r.x);
+    // measured fresh each time: re-wrapped text changes the minimum as the width changes
+    L.heights[key] = Math.max(minBoxHeight(key), Math.round(r.h + e.clientY - r.y));
+    applyBoxSize(key);
   });
-  split.addEventListener("pointerup", () => { drag = null; });
-  split.addEventListener("pointercancel", () => { drag = null; });
-  split.addEventListener("keydown", (e) => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  const end = () => {
+    if (!r) return;
+    r = null;
+    resizingBox = false;
+    saveLayout();
+    arrangeTools();
+  };
+  grip.addEventListener("pointerup", end);
+  grip.addEventListener("pointercancel", end);
+  grip.addEventListener("dblclick", () => {
+    delete L.heights[key];
+    saveLayout();
+    arrangeTools();
+  });
+}
+
+/** Drag a divider to set the width of the column on its left; double-click it to reset that
+ *  column. (The divider beside the preview does the same for the last column.) */
+function bindColumnDivider(div, colIndex) {
+  let r = null;
+  div.addEventListener("pointerdown", (e) => {
+    const c = colIndex();
+    if (e.button !== 0 || c < 0 || c >= (toolColumns || []).length) return;
     e.preventDefault();
-    setWidth(pane.offsetWidth + (e.key === "ArrowLeft" ? -16 : 16));
+    try { div.setPointerCapture(e.pointerId); } catch (_) { /* synthetic events */ }
+    r = { x: e.clientX, c, w: columnWidth(c) };
+    resizingBox = true;
   });
+  div.addEventListener("pointermove", (e) => {
+    if (r) setColumnWidth(r.c, r.w + e.clientX - r.x);
+  });
+  const end = () => {
+    if (!r) return;
+    r = null;
+    resizingBox = false;
+    saveLayout();
+    arrangeTools();
+  };
+  div.addEventListener("pointerup", end);
+  div.addEventListener("pointercancel", end);
+  div.addEventListener("dblclick", () => {
+    const c = colIndex();
+    if (c < 0) return;
+    for (const k of toolColumns[c] || []) delete L.widths[k];
+    saveLayout();
+    arrangeTools();
+  });
+  div.addEventListener("keydown", (e) => {
+    const c = colIndex();
+    if ((e.key !== "ArrowLeft" && e.key !== "ArrowRight") || c < 0 || c >= (toolColumns || []).length) return;
+    e.preventDefault();
+    setColumnWidth(c, columnWidth(c) + (e.key === "ArrowLeft" ? -16 : 16));
+    saveLayout();
+    arrangeTools();
+  });
+}
+
+// the turning grid reads bottom-up: when its box is resized or blocks are added on top, keep the
+// same distance from the bottom (block 1) in view; a browser on its own keeps the top fixed
+let turnFromBottom = 0;
+
+function anchorTurnScroll() {
+  const s = $("turnScroll");
+  s.scrollTop = s.scrollHeight - s.clientHeight - turnFromBottom;
+}
+
+function turnScrollToBottom() {
+  turnFromBottom = 0;
+  anchorTurnScroll();
 }
 
 // ---------- wiring ----------
 
 function init() {
+  // tool boxes: column stacks to flow them into, a drop marker, and per-box drag and resize handles
+  const tools = $("tools"), first = tools.firstChild;
+  for (let i = 0; i < 3; i++) {
+    const col = document.createElement("div");
+    col.className = "toolcol";
+    tools.insertBefore(col, first);
+    if (i < 2) {
+      const div = document.createElement("div");
+      div.className = "coldiv";
+      div.title = "Drag to resize the column; double-click to reset it";
+      tools.insertBefore(div, first);
+      bindColumnDivider(div, () => i);
+    }
+  }
+  // the divider beside the preview is the right edge of the last tool column
+  bindColumnDivider($("splitter"), () => (toolColumns || []).length - 1);
+  const mark = document.createElement("div");
+  mark.id = "dropMark";
+  mark.hidden = true;
+  document.body.appendChild(mark);
+  for (const k of TOOL_KEYS) {
+    bindBoxDrag(k);
+    bindGrip(k);
+  }
+  $("resetLayout").addEventListener("click", resetLayout);
+  $("turnScroll").addEventListener("scroll", () => {
+    const s = $("turnScroll");
+    turnFromBottom = s.scrollHeight - s.clientHeight - s.scrollTop;
+  });
+
   bindPaint(preview.scroller, (e) => preview.point(e), onPreview);
   bindPaint(gridCanvas, (e) => {
     const rect = gridCanvas.getBoundingClientRect();
@@ -1303,7 +1651,6 @@ function init() {
   }, onTurn, { tapTouch: true });
   bindWheelZoom(preview.scroller, zoomBy);
   bindWheelZoom(repeatView.scroller, repeatZoomBy);
-  bindSplitter();
 
   const onEnter = (id, fn) => $(id).addEventListener("keydown", (e) => { if (e.key === "Enter") fn(); });
   for (const r of document.querySelectorAll('input[name="weave"]')) {
@@ -1346,6 +1693,7 @@ function init() {
   onEnter("repeats", openRepeat);
 
   $("addBlock").addEventListener("click", addTurnBlock);
+  onEnter("addCount", addTurnBlock);
   $("dupBlock").addEventListener("click", duplicateTurnBlock);
   $("bulkF").addEventListener("click", () => bulkTurnBlock("f"));
   $("bulkB").addEventListener("click", () => bulkTurnBlock("b"));
@@ -1409,6 +1757,19 @@ function init() {
     });
   });
   for (const id of ["previewPane", "gridWrap", "toolsPane", "repeatPane"]) ro.observe($(id));
+  // a box changing height (e.g. blocks added) can change how the boxes flow into columns
+  let boxPending = false;
+  const boxRo = new ResizeObserver(() => {
+    if (boxPending) return;
+    boxPending = true;
+    requestAnimationFrame(() => {
+      boxPending = false;
+      arrangeTools();
+      anchorTurnScroll();
+    });
+  });
+  for (const k of TOOL_KEYS) boxRo.observe($(BOX_ID[k]));
+  boxRo.observe($("turnScroll"));
 
   // a reload can restore form state; start from the inkle defaults the state above describes
   document.querySelector('input[name="weave"][value="inkle"]').checked = true;

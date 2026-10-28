@@ -4,6 +4,9 @@ build/
 *.spec
 __pycache__/
 
+# per-computer tool-box layout, written by the app when you rearrange or resize the tools
+layout.json
+
 # Claude Code settings and private project notes (kept out of the public repo)
 .claude/
 CLAUDE.md

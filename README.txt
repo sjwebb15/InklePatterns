@@ -58,14 +58,35 @@ The window has three areas:
 
   - Top: the H/U warping grid, across the full width of the window.
   - Bottom left: the tool boxes (Warp threads, Preview zoom, Preset colors,
-    Custom color, Tool, Repeat preview). They rearrange themselves into
-    one, two or three columns to fit the window height, so you never need to
-    scroll to reach a control.
+    Custom color, Tool, Repeat preview). They fill one column from top to
+    bottom, then flow into a second or third column if the window isn't
+    tall enough, so you rarely need to scroll to reach a control.
   - Bottom right: the pattern preview, showing how the woven band will look.
 
-You can resize the window freely. To give the tool boxes more or less room,
-drag the divider between them and the preview. The File menu at the top
-holds Open, Save and Save As.
+You can resize the window freely. The File menu at the top holds Open, Save
+and Save As.
+
+Arranging the tool boxes
+  - To move a box, drag it by its title. A blue line shows where it will
+    go. The other boxes flow around it.
+  - Each column of boxes has its own width, and the boxes in it fill that
+    width. To change a column's width, drag the thin divider on its right:
+    the line between two columns, or, for the last column, the divider
+    between the tool boxes and the preview. Double-click a divider to put
+    that column back to its natural width.
+  - To make a box taller, drag the small ◢ grip in its bottom-right corner
+    down. Dragging the grip sideways changes the width of the box's column.
+    Double-click the grip to put the box back to its natural height.
+  - What's inside a box adapts to its size. Sliders get longer, the preset
+    color swatches spread into more columns (fewer rows) in a wider box,
+    and help text re-wraps to fit.
+  - Boxes can't be made smaller than their contents, so nothing gets cut
+    off. The Turning sequence box (tablet weaving) is the exception: its
+    grid of cells stays the same size and scrolls when the box is too
+    small to show all of it.
+  - Resizing doesn't move boxes between columns unless one no longer fits.
+  - Your arrangement and sizes are remembered the next time you start the
+    program. View > Reset tool layout puts everything back as it was.
 
 This section and sections 3 to 10 describe inkle weaving. In tablet weaving
 the grid, tool boxes and preview change; see section 13.
@@ -325,7 +346,7 @@ Starting a tablet pattern
     Enter.
   - The new pattern has every hole white, the tablets threaded S, Z, S, Z...
     (tablet 1 is S), and a turning sequence of 4 picks forward then 4
-    backward.
+    backward, one row per pick.
   - Switching between inkle and tablet weaving starts a new, blank pattern.
     Save your work first; the switch can't be undone.
 
@@ -333,8 +354,9 @@ In tablet mode, the Tool and Repeat preview boxes are hidden and a Turning
 sequence box appears. Rotate 90° is not available.
 
 The threading grid
-The grid at the top has one column per tablet, tablet 1 at the left, and
-five rows:
+The grid at the top has one column per tablet, numbered from 1 at the left.
+(If the columns are too narrow for every number, only every 2nd, 5th or
+10th tablet is numbered.) Below the numbers are five rows:
   - A, B, C, D: the thread color in each hole. Left-click (or drag) to
     paint holes with the current color. Right-click (or drag) to erase them
     to white.
@@ -345,29 +367,39 @@ The turning sequence
 The Turning sequence box holds the sequence as a list of blocks. Each block
 is one row. It says, for every tablet, whether that tablet turns forward
 (F), turns backward (B) or stays still (idle, shown blank), and how many
-picks the block lasts. The blocks run from top to bottom, then the whole
-sequence starts again from the top. The numbers across the top row are the
-tablet numbers.
+picks the block lasts. Like a printed draft, the sequence reads from the
+bottom up: the bottom row is the first block, and each block above it comes
+next. After the top row, the whole sequence starts again from the bottom.
+The numbers under the bottom row are the tablet numbers. Each row is
+numbered at its far left, counting up from 1 at the bottom; while every row
+is 1×, that's also the pick number.
 
   - Left-click a cell to switch it between F and B. Drag along a row to set
     several cells. The first cell you press decides whether the drag makes
     them F or B.
   - Right-click (or right-drag) a cell to make it idle.
-  - The number at the left of each row (for example "4×") is how many picks
+  - The number at the left of each row (for example "1×") is how many picks
     the block lasts. Left-click it to add one, right-click to take one away.
+    Most drafts use one row per pick, so blocks start at 1×; raise the
+    count to repeat a row instead of copying it.
   - Click the red × at the left of a row to delete that block. The last
     remaining block can't be deleted.
-  - "+ Add block" adds a block at the bottom: every tablet forward, 4
-    picks.
-  - "Duplicate last" adds a copy of the bottom block. A common way to build
-    a sequence is to duplicate a block, then change a few tablets.
+  - "+ Add [1] rows" adds that many rows at the top, each with every tablet
+    forward for 1 pick. Type how many rows you want (1 to 200) in the box,
+    then click "+ Add" or press Enter. Undo removes them all at once.
+  - "Duplicate last" adds a copy of the top block above it. A common way to
+    build a sequence is to duplicate a block, then change a few tablets.
   - The block you clicked last is the selected block, shaded blue. The
     buttons under "Selected block" change it all at once: "All F", "All B",
     "Evens → B" (tablets 2, 4, 6... turn backward; others are unchanged)
     and "Odds → B" (tablets 1, 3, 5... turn backward; others unchanged).
   - If there are more tablets than fit, use the scrollbar under the grid, or
-    drag the divider between the tool boxes and the preview to make the tool
-    area wider.
+    make the box's column wider (drag the divider on its right, or the
+    box's corner grip sideways; see section 2). Once every tablet fits, the
+    scrollbar goes away.
+  - If there are more blocks than fit, the grid scrolls up and down too. It
+    always keeps the bottom row (block 1) in place. You can also make the
+    box shorter or taller with its corner grip.
 
 Flipping cards
 To turn a card over partway through, which swaps it between S and Z without
@@ -379,7 +411,8 @@ round. A card flipped in a repeating block flips back and forth each time
 through the sequence.
 
 The preview
-  - Each row of the preview is one pick, with pick 1 at the top. Each
+  - Each row of the preview is one pick, with pick 1 at the bottom and the
+    band growing upward, the way it grows on the loom. Each
     tablet shows as a tilted oval in the color of the thread showing at that
     pick.
   - The tilt shows which way the twist leans. It depends on the tablet's
@@ -394,7 +427,7 @@ The preview
 
 Tracing one tablet
 To check a tablet pick by pick, for example against a chart or a woven
-sample, click its number in the top row of the turning sequence, or type
+sample, click its number under the turning sequence, or type
 the number into "Trace tablet #" and click Go (or press Enter). A small
 window lists that tablet's first 32 picks: the turn (F, B or I for idle),
 which hole is showing, its color, and whether the card is S or Z at that
@@ -430,13 +463,22 @@ Turning sequence (tablet weaving)
   Left-click / drag a cell ..... switch between F and B
   Right-click / drag a cell .... make idle
   Shift + left-click a cell .... flip the card at that block (or undo it)
-  Left / right-click "4×" ...... one more / one fewer pick in the block
+  Left / right-click "1×" ...... one more / one fewer pick in the block
   Click × ...................... delete the block
+  "+ Add [n] rows" ............. add n all-forward 1× rows on top
   Click a tablet number ........ open that tablet's trace
 
 Preset swatches
   Left-click ................... make it the current color
   Right-click .................. replace it with the current color
+
+Tool boxes
+  Drag a box's title ........... move the box
+  Drag a column divider ........ change that column's width
+  Double-click a divider ....... column back to its natural width
+  Drag the ◢ grip .............. down: box height; sideways: column width
+  Double-click the ◢ grip ...... box back to its natural height
+  View > Reset tool layout ..... original order and sizes
 
 Keyboard
   Enter (in a number box) ...... same as that box's button
@@ -478,6 +520,13 @@ Preset colors
     browser. Clearing your browser's site data resets it.
   - The Reset button in the Preset colors box restores the original
     palette.
+
+Tool box layout
+  - Your arrangement of the tool boxes is also saved in your browser.
+  - There's no View menu: use the "Reset layout" button at the top of the
+    page to restore the original order and sizes.
+  - In a narrow window (such as a phone) the boxes are stacked one above
+    the other in your chosen order, and can't be resized or dragged.
 
 Repeat preview and tablet trace
   - Each opens as a panel on top of the page rather than a separate

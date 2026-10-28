@@ -15,6 +15,7 @@
     <button id="openBtn" title="Open a .inkl pattern (Ctrl+O)">Open&hellip;</button>
     <button id="saveBtn" title="Save (Ctrl+S)">Save</button>
     <button id="saveAsBtn" title="Save to a new file (Ctrl+Shift+S)">Save As&hellip;</button>
+    <button id="resetLayout" title="Put the tool boxes back in their original order and sizes">Reset layout</button>
     <a class="help" href="https://github.com/sjwebb15/InklePatterns/blob/main/README.txt" target="_blank" rel="noopener">Help</a>
   </nav>
   <input type="file" id="fileInput" accept=".inkl" hidden>
@@ -25,7 +26,7 @@
 <main>
   <div id="toolsPane">
     <div id="tools">
-      <section class="box">
+      <section class="box" id="warpBox">
         <h2 id="warpTitle">Warp threads</h2>
         <label class="check"><input type="radio" name="weave" value="inkle" checked> Inkle (pick-up)</label>
         <label class="check"><input type="radio" name="weave" value="tablet"> Tablet (cards)</label>
@@ -40,7 +41,7 @@
         <label class="check eraser"><input type="checkbox" id="eraser"> Eraser (left-click erases)</label>
       </section>
 
-      <section class="box">
+      <section class="box" id="zoomBox">
         <h2>Preview zoom</h2>
         <div class="row">
           <button id="zoomOut" class="sq" title="Zoom out">&minus;</button>
@@ -50,7 +51,7 @@
         <label class="check"><input type="checkbox" id="rotate"> Rotate 90&deg;</label>
       </section>
 
-      <section class="box">
+      <section class="box" id="presetBox">
         <h2>Preset colors</h2>
         <div id="palette"></div>
         <div class="row gap-top">
@@ -60,7 +61,7 @@
         <p class="hint">Right-click a swatch to replace it.</p>
       </section>
 
-      <section class="box">
+      <section class="box" id="colorBox">
         <h2>Custom color</h2>
         <div class="row slider-row"><label for="sR">R</label><input id="sR" type="range" min="0" max="255"><span class="val" id="vR"></span></div>
         <div class="row slider-row"><label for="sG">G</label><input id="sG" type="range" min="0" max="255"><span class="val" id="vG"></span></div>
@@ -73,7 +74,7 @@
         <label class="check"><input type="radio" name="mode" value="color" checked> Color thread</label>
         <label class="check"><input type="radio" name="mode" value="pickup"> Pick-up</label>
         <label class="check"><input type="radio" name="mode" value="range"> Select repeat rows</label>
-        <p class="hint">Shift+click = pick-up. Right-click<br>erases (or resets range).</p>
+        <p class="hint">Shift+click = pick-up. Right-click erases (or resets range).</p>
       </section>
 
       <section class="box" id="repeatBox">
@@ -96,12 +97,14 @@
 
       <section class="box" id="turnBox" hidden>
         <h2>Turning sequence</h2>
-        <p class="desc">Each row (block) holds a per-tablet<br>F/B pattern for its repeat count.</p>
+        <p class="desc">Each row (block) holds a per-tablet F/B pattern for its repeat count. Pick 1 is the bottom row.</p>
         <div id="turnScroll"><canvas id="turnCanvas" aria-label="Turning sequence"></canvas></div>
         <div class="row">
-          <button id="addBlock">+ Add block</button>
-          <button id="dupBlock">Duplicate last</button>
+          <button id="addBlock">+ Add</button>
+          <input id="addCount" type="number" min="1" max="200" value="1" aria-label="Number of rows to add">
+          <span>rows</span>
         </div>
+        <div class="row gap-small"><button id="dupBlock">Duplicate last</button></div>
         <p class="hint">Selected block:</p>
         <div class="row gap-small">
           <button id="bulkF" class="bulk">All F</button>
@@ -112,13 +115,13 @@
           <button id="bulkOdds" class="bulk">Odds &rarr; B</button>
         </div>
         <label class="check gap-top"><input type="checkbox" id="flipMode"> Flip mode (click flips S/Z)</label>
-        <p class="hint">Click a tablet to toggle F/B, drag<br>for a range. Right-click (or drag)<br>sets idle &mdash; the card doesn't turn.<br>Shift+click flips S&harr;Z there (marked<br>with a pink corner). Click &times; to<br>delete a block, the repeat count<br>to change it (right-click &minus;1).</p>
+        <p class="hint">Click a tablet to toggle F/B, drag for a range. Right-click (or drag) sets idle &mdash; the card doesn't turn. Shift+click flips S&harr;Z there (marked with a pink corner). Click &times; to delete a block, the repeat count to change it (right-click &minus;1).</p>
         <div class="row gap-top">
           <span>Trace tablet #:</span>
           <input id="traceNum" type="number" min="1" max="200" value="1" aria-label="Tablet to trace">
           <button id="traceGo">Go</button>
         </div>
-        <p class="hint">Or click a tablet's number in the<br>header row above to trace it.</p>
+        <p class="hint">Or click a tablet's number in the number row below the blocks.</p>
       </section>
     </div>
   </div>

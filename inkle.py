@@ -25,6 +25,7 @@ if getattr(sys, "frozen", False):
 else:
     PRESETS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "presets.json")
     DEFAULT_PRESETS_FILE = None
+LAYOUT_FILE = os.path.join(os.path.dirname(PRESETS_FILE), "layout.json")  # tool-box order and sizes
 HEX_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 LABEL_W = 36
@@ -41,12 +42,41 @@ CANVAS_BG = "#F0F1F3"
 HINT = "#6B6F76"
 SWATCH = 22  # preset swatch size in pixels
 SWATCH_GAP = 3
-SWATCH_COLS = 10
+SWATCH_COLS = 5  # palette columns at the box's natural width; a wider box fits more
+COL_DIVIDER_W = 9  # width of the draggable divider between tool columns
+MIN_PREVIEW_W = 120  # the tool columns never push the preview narrower than this
 TABLET_HOLES = "ABCD"  # a tablet's four holes, clockwise on its front face
 TABLET_TILT_DEG = 21  # lean angle of each tablet's oval, off vertical
 TABLET_FILL = 1.25  # how much of its own cell each oval occupies; >1 lets neighbors overlap
 TURN_CELL_W = 18  # width of one tablet's F/B cell in the turning-sequence editor
-TURN_LABEL_W = 56  # width of the repeats/delete control area at the left of each block row
+TURN_LABEL_W = 84  # width of the row-number/delete/repeats area at the left of each block row
+TURN_NUM_W = 26  # the row number's part of that area; the delete "×" is in the next TURN_DEL_W px
+TURN_DEL_W = 20
+TABLET_NUM_H = 18  # height of the tablet-number row above the threading grid's hole rows
+TOOL_KEYS = ("warp", "zoom", "preset", "color", "tool", "repeat", "turn")  # default tool-box order
+TOOL_GAP = 6  # padding around each tool box
+TURN_MIN_W = 240  # the turning-sequence box can shrink below its natural size (its grid scrolls)
+
+
+def flow_columns(heights, avail, max_cols=3):
+    """Split boxes (given by height, in order) into columns the way text flows: fill a column top
+    to bottom, start the next when the next box won't fit, up to max_cols (the last one takes any
+    overflow). Gives the fewest columns that fit, and keeps a dropped box where it was dropped."""
+    cols, used = [[]], 0
+    for i, h in enumerate(heights):
+        if cols[-1] and used + h > avail and len(cols) < max_cols:
+            cols.append([])
+            used = 0
+        cols[-1].append(i)
+        used += h
+    return cols
+
+
+def _pack_pad(value):
+    """Total padding from a pack_info padx/pady value: one number (both sides) or a pair."""
+    parts = value if isinstance(value, (tuple, list)) else str(value).split()
+    total = sum(int(str(p)) for p in parts)
+    return total if len(parts) == 2 else 2 * total
 
 
 def hex_dims(hw):
@@ -147,19 +177,13 @@ def tablet_hole_trace(blocks, tablet, rows, home_is_z):
     change mid-pattern -- see flips, below). The single source of truth for "which hole shows and
     how it leans" -- both the renderer and the trace/debug view call this, so they can't diverge.
 
-    Hole rotation order is the SAME for every tablet regardless of S/Z threading -- it's a fixed
-    physical fact of the card (confirmed 2026-10-20): labeled clockwise A,B,C,D starting at the
-    top-right corner (home position: A top-right, B bottom-right, C bottom-left, D top-left, with
-    D nearest the weaver), a forward turn is clockwise, and clockwise rotation carries the hole
-    that was at top-left into top-right -- so forward DECREMENTS the index (A->D->C->B->A), not
-    increments it. S/Z only changes the lean (tablet_lean), never which hole is active.
+    Hole order matches published drafts (Twisted Threads; checked cell-for-cell against a 24-tablet,
+    16-pick draft, 2026-10-28): from home, forward turns show A, B, C, D, A...; backward turns show
+    D, C, B, A, D... The same for every tablet: S/Z only changes the lean (tablet_lean).
 
-    A turn in the same direction as the tablet's previous turn advances to the next hole; a turn
-    in the OPPOSITE direction (a reversal) does NOT advance -- the same hole repeats for that pick.
-    This is real physical behavior, not an approximation: a forward run ending on hole D followed
-    by a backward run starting on D is what makes those two adjacent picks the same color, visible
-    in a woven band as a longer thread bridging across the reversal. Idle picks never change idx
-    and don't count as "the previous turn" when the next real turn checks for a reversal.
+    `rot` counts quarter turns. A forward pick shows hole `rot` then advances; a backward pick steps
+    back then shows hole `rot`. So a reversal repeats the previous pick's hole (real behavior: the
+    longer thread bridging a reversal in a woven band), and idle picks change nothing.
 
     Flipping (physically turning a card over) swaps its S/Z threading from that point on, without
     touching hole rotation (which never depended on S/Z) -- real weavers use this to redirect the
@@ -167,8 +191,7 @@ def tablet_hole_trace(blocks, tablet, rows, home_is_z):
     tablet, parallel to "pattern") marks tablets that flip the moment that block is reached; this
     re-applies every time the cycle revisits that block, same as the F/B/I pattern it sits beside
     -- a tablet marked to flip in a block that recurs every cycle flips back and forth each time."""
-    idx = 0
-    last_dir = None  # last non-idle direction ("F" or "B"), ignoring idle picks entirely
+    rot = idx = 0
     is_z_now = home_is_z
     for pick in range(1, rows + 1):
         block, is_entry = turn_block_entry_at(blocks, pick)
@@ -177,11 +200,12 @@ def tablet_hole_trace(blocks, tablet, rows, home_is_z):
             if flips and tablet < len(flips) and flips[tablet]:
                 is_z_now = not is_z_now
         state = turn_state_at(blocks, tablet, pick)
-        if state != "I":
-            if last_dir is None or state == last_dir:
-                idx = (idx + (-1 if state == "F" else 1)) % 4
-            # else: reversal -- idx repeats the previous pick's hole, no advance
-            last_dir = state
+        if state == "F":
+            idx = rot % 4
+            rot += 1
+        elif state == "B":
+            rot -= 1
+            idx = rot % 4
         yield pick, state, idx, is_z_now
 
 
@@ -197,13 +221,24 @@ def ellipse_points(cx, cy, rx, ry, angle, n=24):
     return pts
 
 
-def draw_tablet_band(canvas, colors, is_z, blocks, x0, y0, cell_w, cell_h, rows,
+def tablet_label_step(cell_w, n):
+    """Label every tablet if the numbers fit their columns, else every 2nd, 5th, 10th... one."""
+    need = len(str(n)) * 7 + 4
+    for step in (1, 2, 5, 10, 20, 50, 100):
+        if cell_w * step >= need:
+            return step
+    return 100
+
+
+def draw_tablet_band(canvas, colors, is_z, blocks, x0, y_bottom, cell_w, cell_h, rows,
                      tilt_deg=TABLET_TILT_DEG, fill=TABLET_FILL, line=HEX_LINE):
     """Draw the woven band: one tilted oval per tablet per pick, each centered and rotated within
-    its own cell with no dependency on its neighbors. A tablet's own turning sequence (which may
-    differ from every other tablet's) is just a lean and a hole-rotation count computed purely
-    from its own history -- there's no shared edge between cells to keep in sync, so individualized
-    turning (different tablets reversing at different picks) needs no special handling at all."""
+    its own cell with no dependency on its neighbors. Pick 1 sits at `y_bottom` and later picks
+    stack upward, the way a band is woven and a draft is read. A tablet's own turning sequence
+    (which may differ from every other tablet's) is just a lean and a hole-rotation count computed
+    purely from its own history -- there's no shared edge between cells to keep in sync, so
+    individualized turning (different tablets reversing at different picks) needs no special
+    handling at all."""
     n = len(colors)
     half_long = cell_h / 2 * fill
     half_short = cell_w / 2 * fill * 0.85
@@ -214,7 +249,7 @@ def draw_tablet_band(canvas, colors, is_z, blocks, x0, y0, cell_w, cell_h, rows,
         for pick, state, idx, is_z_now in tablet_hole_trace(blocks, col, rows, is_z[col]):
             if state != "I":  # idle: the card doesn't move, so its rotation and lean don't change
                 angle = tilt if tablet_lean(is_z_now, state == "B") else -tilt
-            cy = y0 + (pick - 0.5) * cell_h
+            cy = y_bottom - (pick - 0.5) * cell_h
             pts = [v for p in ellipse_points(cx, cy, half_short, half_long, angle) for v in p]
             color = colors[col][idx] or EMPTY
             canvas.create_polygon(pts, fill=color, outline=line, smooth=True)
@@ -245,6 +280,7 @@ class InkleApp(tk.Tk):
         self._turn_drag_block = None
         self._turn_drag_target = True
         self._turn_shift_stroke = False  # whether the in-progress click/drag started with Shift held
+        self._turn_from_bottom = 0  # px of the turning grid scrolled out of view below its visible part
         self.path = None  # current .inkl file
         # undo/redo history of pattern snapshots; one entry per click/drag stroke or Generate
         self._undo = []
@@ -252,6 +288,10 @@ class InkleApp(tk.Tk):
         self._stroke_saved = False  # whether the current stroke has already pushed its undo snapshot
         self.presets = self._load_presets()
         self.color = "#DC143C"
+        self.layout = self._load_layout()  # tool-box order, sizes, and tool-area width
+        self._reflow_pending = None
+        self._resizing_box = None  # key of the box whose grip is being dragged
+        self._box_drag = None  # in-progress drag of a box by its title
         self._build_menu()
         # H/U (or tablet threading) grid: full window width, at the very top; cell width scales to fit
         self.grid_canvas = tk.Canvas(self, bg=CANVAS_BG, height=self.grid_height(), highlightthickness=0)
@@ -267,12 +307,14 @@ class InkleApp(tk.Tk):
         # A PanedWindow (not a plain Frame) so the user can drag the divider to widen the tools
         # panel themselves -- useful for the turning-sequence grid, which otherwise needs its own
         # horizontal scrollbar for wide patterns.
-        paned = ttk.PanedWindow(self, orient="horizontal")
+        paned = self.paned = ttk.PanedWindow(self, orient="horizontal")
         paned.pack(side="top", fill="both", expand=True)
         self.tools_container = tools_container = ttk.Frame(paned)
         self._build_controls(tools_container)
-        tools_container.bind("<Configure>", self._on_tools_configure)
+        tools_container.bind("<Configure>", lambda e: self._schedule_tool_reflow())
         paned.add(tools_container, weight=0)
+        paned.bind("<ButtonRelease-1>", lambda e: self._on_tools_sash("release"))  # it sets the last column's width
+        paned.bind("<Double-Button-1>", lambda e: self._on_tools_sash("reset"))
 
         right = ttk.Frame(paned)
         paned.add(right, weight=1)
@@ -290,6 +332,15 @@ class InkleApp(tk.Tk):
         self.canvas.bind("<B3-Motion>", lambda e: self.on_click(e, True))
         self.set_color(self.color)
         self._update_undo_buttons()
+        # each box's frame overhead (padding, border, title), measured while every box is still its
+        # natural size, so _natural_box_size() works later even for boxes given a fixed size
+        self.update_idletasks()
+        self._box_overhead = {}
+        for key, f in self.box_by_key.items():
+            cw, ch = self._content_size(f)
+            self._box_overhead[key] = (f.winfo_reqwidth() - cw, f.winfo_reqheight() - ch)
+        for key in TOOL_KEYS:
+            self._apply_box_size(key)
         self._on_weave_type_change(reset=False)  # hide/show the right tool boxes for the default mode
 
     def _layout_preview_scrollbars(self):
@@ -309,48 +360,378 @@ class InkleApp(tk.Tk):
         self._layout_preview_scrollbars()
         self.redraw()
 
-    def _on_tools_configure(self, event=None):
-        """Reflow the tool boxes into 1-3 columns so they always fit the available height without scrolling."""
-        avail_h = event.height if event is not None else self.tools_container.winfo_height()
-        if avail_h <= 1 or not self.tool_boxes:
-            return
-        heights = [f.winfo_reqheight() for f in self.tool_boxes]
-        chosen = 3
-        for cols in (1, 2, 3):
-            col_heights = [0] * cols
-            for idx, h in enumerate(heights):
-                col_heights[idx % cols] += h
-            if max(col_heights) <= avail_h:
-                chosen = cols
-                break
-        if chosen != self._tool_cols:
-            self._tool_cols = chosen
-            self._arrange_tools(chosen)
+    # ---------- tool-box layout: flowing columns, drag to reorder, resizable boxes and columns ----------
 
-    def _arrange_tools(self, cols):
-        parent = self.tool_boxes[0].master
-        for c in range(3):
-            parent.columnconfigure(c, weight=1 if c < cols else 0)
-        for idx, f in enumerate(self.tool_boxes):
-            # the turning-sequence box stretches to use any extra width the user drags in (so its
-            # tablet grid needs less horizontal scrolling); other boxes stay their natural size.
-            sticky = "new" if f is getattr(self, "turn_f", None) else "nw"
-            f.grid(row=idx // cols, column=idx % cols, sticky=sticky, padx=6, pady=6)
+    def _visible_tool_keys(self):
+        hidden = {"tool", "repeat"} if self.weave_var.get() == "tablet" else {"turn"}
+        return [k for k in self.layout["order"] if k not in hidden]
+
+    def _schedule_tool_reflow(self):
+        if self._reflow_pending is None:
+            self._reflow_pending = self.after_idle(self._reflow_tools)
+
+    def _reflow_tools(self, force=False):
+        """Flow the visible tool boxes, in the user's order, into the fewest columns (1-3) that fit
+        the available height. Each column is its own stack with its own width, and its boxes fill
+        that width.
+
+        The flow is sticky: it's worked out afresh only when it has to be (force: a box was moved,
+        the type of weaving changed, the layout was reset; or the panel's height changed). Resizing a
+        box or column re-wraps text and changes heights, but as long as every column still fits,
+        boxes stay where they are rather than jumping between columns under the pointer."""
+        self._reflow_pending = None
+        avail_h = self.tools_container.winfo_height()
+        if self._resizing_box or avail_h <= 1:
+            return
+        for key in TOOL_KEYS:
+            self._apply_box_size(key)  # a narrower column can make a box's contents taller
+        keys = self._visible_tool_keys()
+        heights = dict(zip(keys, (self.box_by_key[k].winfo_reqheight() + 2 * TOOL_GAP for k in keys)))
+        current = self._tool_columns
+        keep = (not force and avail_h == self._flow_avail_h and current is not None
+                and [k for col in current for k in col] == keys
+                and all(sum(heights[k] for k in col) <= avail_h or len(col) == 1 for col in current))
+        self._flow_avail_h = avail_h
+        columns = current if keep else [[keys[i] for i in col]
+                                        for col in flow_columns([heights[k] for k in keys], avail_h)]
+        if columns != self._tool_columns or force:
+            self._tool_columns = columns
+            for f in self.box_by_key.values():
+                f.pack_forget()
+            for c, (frame, div) in enumerate(zip(self._tool_colframes, self._tool_dividers + [None])):
+                if c < len(columns):
+                    frame.grid()
+                else:
+                    frame.grid_remove()
+                if div is not None:
+                    if c < len(columns) - 1:
+                        div.grid()
+                    else:
+                        div.grid_remove()
+            for c, col in enumerate(columns):
+                for k in col:
+                    f = self.box_by_key[k]
+                    f.pack(in_=self._tool_colframes[c], side="top", fill="x", padx=TOOL_GAP, pady=TOOL_GAP)
+                    f.lift()
+        self._size_tool_columns()
+
+    def _column_width(self, c):
+        """A column's box width: as wide as its widest box -- the width the user gave a box, or else
+        its natural width -- but never narrower than every box in it allows. Widths belong to the
+        boxes, not the columns, so a box keeps its width when it flows into another column."""
+        keys = (self._tool_columns or [[]])[c] if c < len(self._tool_columns or []) else []
+        if not keys:
+            return 0
+        minimum = max(self._min_box_size(k)[0] for k in keys)
+        users = [self.layout["widths"][k] for k in keys if k in self.layout["widths"]]
+        return max(minimum, max(users) if users else max(self._natural_box_size(k)[0] for k in keys))
+
+    def _size_tool_columns(self):
+        for c, frame in enumerate(self._tool_colframes):
+            w = self._column_width(c) + 2 * TOOL_GAP
+            if w > 2 * TOOL_GAP and frame.cget("width") != w:
+                frame.configure(width=w)
+                frame.pack_propagate(False)
+        self._fit_tools_pane()
+
+    def _tools_needed_width(self):
+        n = len(self._tool_columns or [])
+        return sum(self._column_width(c) + 2 * TOOL_GAP for c in range(n)) + max(0, n - 1) * COL_DIVIDER_W
+
+    def _fit_tools_pane(self):
+        """Put the divider beside the preview at the right edge of the last column. (A
+        ttk.PanedWindow sizes its panes once, when first shown, and doesn't follow later changes in
+        what they ask for -- so every reflow or column resize has to move the divider itself.)"""
+        want = self._tools_needed_width()
+        # never more than the window allows (leaving the preview some room): asking for more just
+        # gets clamped, the move re-triggers this layout, and it asks again -- forever
+        want = min(want, self.paned.winfo_width() - MIN_PREVIEW_W)
+        if want > 0 and abs(self.paned.sashpos(0) - want) > 1:
+            self.paned.sashpos(0, want)
+
+    def _req_width(self, w):
+        """Width a widget's packed contents ask for, not counting text that re-wraps to whatever
+        width it's given (so wrapped text never holds a box wider than its other contents need)."""
+        if w in self._wrap_labels:
+            return 0
+        if w is self._turn_area:
+            # the grid plus room for its vertical scrollbar, whether or not that's showing right
+            # now -- otherwise the scrollbar appearing would widen the column, re-wrap the text, make
+            # the box fit, hide the scrollbar, narrow the column... round and round
+            return self.turn_canvas.winfo_reqwidth() + self.turn_vbar.winfo_reqwidth()
+        slaves = w.pack_slaves()
+        if not slaves:
+            return w.winfo_reqwidth()
+        across = widest = 0
+        for s in slaves:
+            info = s.pack_info()
+            sw = self._req_width(s) + _pack_pad(info["padx"]) + 2 * int(info["ipadx"])
+            if info["side"] in ("top", "bottom"):
+                widest = max(widest, across + sw)
+            else:
+                across += sw
+        return max(widest, across)
+
+    def _content_size(self, f):
+        """Width and height a box's packed contents ask for (all are packed top/bottom), as Tk
+        itself works it out -- used once at startup to measure each box's frame overhead."""
+        w = h = 0
+        for s in f.pack_slaves():
+            info = s.pack_info()
+            w = max(w, s.winfo_reqwidth() + _pack_pad(info["padx"]) + 2 * int(info["ipadx"]))
+            h += s.winfo_reqheight() + _pack_pad(info["pady"]) + 2 * int(info["ipady"])
+        return w, h
+
+    def _natural_box_size(self, key):
+        """Natural width (ignoring re-wrapping text) and natural height (at the current width)."""
+        f = self.box_by_key[key]
+        ow, oh = self._box_overhead[key]
+        return self._req_width(f) + ow, self._content_size(f)[1] + oh
+
+    def _min_box_size(self, key):
+        """Smallest size a box may be made: its contents, except the turning-sequence box, whose
+        grid scrolls, so it only needs room for its controls and a couple of rows."""
+        w, h = self._natural_box_size(key)
+        if key == "turn":
+            return TURN_MIN_W, h - self.turn_canvas.winfo_reqheight() + 2 * CELL
+        return w, h
+
+    def _apply_box_size(self, key):
+        """Give a box the user's height (never less than its minimum), or let it size to its
+        contents. Its width always comes from its column."""
+        f = self.box_by_key[key]
+        h = self.layout["heights"].get(key)
+        if not h:
+            if not f.pack_propagate():
+                f.pack_propagate(True)
+                f.configure(width=0, height=0)
+            return
+        h = max(h, self._min_box_size(key)[1])
+        if f.pack_propagate() or f.cget("height") != h:
+            f.pack_propagate(False)
+            f.configure(height=h)
+
+    def _column_of(self, key):
+        for c, col in enumerate(self._tool_columns or []):
+            if key in col:
+                return c
+        return None
+
+    def _on_box_title(self, key, event, phase):
+        """Drag a box by its title to move it: a blue line shows where it will land."""
+        if phase == "press":
+            self._box_drag = {"key": key, "x": event.x_root, "y": event.y_root, "moved": False, "target": None}
+            return
+        d = self._box_drag
+        if not d:
+            return
+        if phase == "motion":
+            if not d["moved"] and abs(event.x_root - d["x"]) + abs(event.y_root - d["y"]) < 5:
+                return
+            d["moved"] = True
+            d["target"] = self._box_drop_target(event.x_root, event.y_root)
+            if d["target"]:
+                tk_, before = d["target"]
+                self._drop_mark.place(in_=self.box_by_key[tk_], relx=0, relwidth=1, rely=0 if before else 1,
+                                      y=-5 if before else 2, height=3)
+                self._drop_mark.lift()
+            return
+        self._drop_mark.place_forget()
+        self._box_drag = None
+        if d["moved"] and d["target"] and d["target"][0] != key:
+            target, before = d["target"]
+            order = [k for k in self.layout["order"] if k != key]
+            order.insert(order.index(target) + (0 if before else 1), key)
+            self.layout["order"] = order
+            self._save_layout()
+            self._reflow_tools(force=True)
+
+    def _box_drop_target(self, x_root, y_root):
+        """(box key, before?) for a drop at a screen point: the column nearest the pointer, then the
+        first box in it whose middle is below the pointer (else after its last box)."""
+        best = None
+        for frame, col in zip(self._tool_colframes, self._tool_columns or []):
+            left, right = frame.winfo_rootx(), frame.winfo_rootx() + frame.winfo_width()
+            dist = 0 if left <= x_root < right else min(abs(x_root - left), abs(x_root - right))
+            if col and (best is None or dist < best[0]):
+                best = (dist, col)
+        if best is None:
+            return None
+        col = best[1]
+        for k in col:
+            f = self.box_by_key[k]
+            if y_root < f.winfo_rooty() + f.winfo_height() / 2:
+                return k, True
+        return col[-1], False
+
+    def _set_column_width(self, c, w):
+        """Set column c's width live (while a divider or grip is being dragged), by giving every box
+        in it that width."""
+        keys = self._tool_columns[c]
+        w = max(max(self._min_box_size(k)[0] for k in keys), w)
+        for k in keys:
+            self.layout["widths"][k] = w
+        self._size_tool_columns()
+
+    def _reset_column_width(self, c):
+        for k in (self._tool_columns or [[]])[c] if 0 <= c < len(self._tool_columns or []) else []:
+            self.layout["widths"].pop(k, None)
+
+    def _on_box_grip(self, key, event, phase):
+        """Drag a box's corner grip: up/down sets the box's height, left/right its column's width.
+        Double-click the grip to give the box back its natural height."""
+        f = self.box_by_key[key]
+        c = self._column_of(key)
+        if phase == "press" and c is not None:
+            self.update_idletasks()  # so the minimum is measured from up-to-date sizes
+            self._resizing_box = {"x": event.x_root, "y": event.y_root, "col": c, "w": self._column_width(c),
+                                  "h": f.winfo_height()}
+            return
+        r = self._resizing_box
+        if phase == "motion" and r:
+            self._set_column_width(r["col"], r["w"] + event.x_root - r["x"])
+            # measured fresh each time: re-wrapped text changes the minimum as the width changes
+            h = max(self._min_box_size(key)[1], r["h"] + event.y_root - r["y"])
+            self.layout["heights"][key] = h
+            f.pack_propagate(False)
+            f.configure(height=h)
+        elif phase == "release" and r:
+            self._resizing_box = None
+            self._save_layout()
+            self._reflow_tools()
+        elif phase == "reset":
+            self._resizing_box = None
+            self.layout["heights"].pop(key, None)
+            self._apply_box_size(key)
+            self._save_layout()
+            self._reflow_tools()
+
+    def _on_col_divider(self, c, event, phase):
+        """Drag the divider after column c to set that column's width; double-click to reset it.
+        (The divider beside the preview does the same for the last column.)"""
+        if phase == "press":
+            self._resizing_box = {"x": event.x_root, "w": self._column_width(c)}
+        elif phase == "motion" and self._resizing_box:
+            self._set_column_width(c, self._resizing_box["w"] + event.x_root - self._resizing_box["x"])
+        elif phase == "release" and self._resizing_box:
+            self._resizing_box = None
+            self._save_layout()
+            self._reflow_tools()
+        elif phase == "reset":
+            self._resizing_box = None
+            self._reset_column_width(c)
+            self._save_layout()
+            self._reflow_tools()
+
+    def _on_tools_sash(self, phase):
+        """The divider beside the preview is the right edge of the last tool column."""
+        n = len(self._tool_columns or [])
+        if not n:
+            return
+        last = n - 1
+        if phase == "reset":
+            self._reset_column_width(last)
+        else:
+            others = self._tools_needed_width() - (self._column_width(last) + 2 * TOOL_GAP)
+            self._set_column_width(last, self.paned.sashpos(0) - others - 2 * TOOL_GAP)
+        self._save_layout()
+        self._reflow_tools()
+
+    def reset_tool_layout(self):
+        self.layout = {"order": list(TOOL_KEYS), "heights": {}, "widths": {}}
+        for key in TOOL_KEYS:
+            self._apply_box_size(key)
+        self._reflow_tools(force=True)
+        self._save_layout()
+
+    def _load_layout(self):
+        layout = {"order": list(TOOL_KEYS), "heights": {}, "widths": {}}
+        try:
+            with open(LAYOUT_FILE) as f:
+                data = json.load(f)
+        except (OSError, ValueError):
+            return layout
+        if not isinstance(data, dict):
+            return layout
+        valid = lambda n: isinstance(n, int) and not isinstance(n, bool) and 0 < n < 10000  # noqa: E731
+        order = data.get("order")
+        if isinstance(order, list):
+            order = list(dict.fromkeys(k for k in order if k in TOOL_KEYS))
+            layout["order"] = order + [k for k in TOOL_KEYS if k not in order]  # boxes added since
+        for field in ("heights", "widths"):
+            values = data.get(field)
+            if isinstance(values, dict):
+                layout[field] = {k: v for k, v in values.items() if k in TOOL_KEYS and valid(v)}
+        return layout
+
+    def _save_layout(self):
+        try:
+            os.makedirs(os.path.dirname(LAYOUT_FILE), exist_ok=True)
+            with open(LAYOUT_FILE, "w") as f:
+                json.dump(self.layout, f)
+        except OSError:
+            pass
 
     def _build_controls(self, parent):
-        # a set of labeled tool boxes that reflow into however many columns fit the available height
-        self.tool_boxes = []
-        self._tool_cols = None
+        # labeled tool boxes that flow into however many columns fit the available height; the user
+        # can drag a box by its title to reorder, and drag its corner grip to resize it
+        self.box_by_key = {}
+        self.box_title = {}
+        self._tool_columns = None
+        self._flow_avail_h = None  # panel height the current flow was worked out for
+        self._wrap_labels = set()  # help text that re-wraps to its box's width
+        # column stacks, created before the boxes so the boxes (packed into them) draw on top, with a
+        # draggable divider between each pair of columns
+        self._tool_colframes = [ttk.Frame(parent) for _ in range(3)]
+        self._tool_dividers = []
+        parent.rowconfigure(0, weight=1)
+        for c, frame in enumerate(self._tool_colframes):
+            frame.grid(row=0, column=2 * c, sticky="ns")
+            if c < 2:
+                div = ttk.Frame(parent, width=COL_DIVIDER_W, cursor="sb_h_double_arrow")
+                div.grid(row=0, column=2 * c + 1, sticky="ns", pady=TOOL_GAP)
+                line = ttk.Separator(div, orient="vertical")
+                line.place(relx=0.5, rely=0, relheight=1)
+                for w in (div, line):
+                    w.bind("<ButtonPress-1>", lambda e, c=c: self._on_col_divider(c, e, "press"))
+                    w.bind("<B1-Motion>", lambda e, c=c: self._on_col_divider(c, e, "motion"))
+                    w.bind("<ButtonRelease-1>", lambda e, c=c: self._on_col_divider(c, e, "release"))
+                    w.bind("<Double-Button-1>", lambda e, c=c: self._on_col_divider(c, e, "reset"))
+                self._tool_dividers.append(div)
 
-        def box(text):
-            f = ttk.LabelFrame(parent, text=text, padding=10)
-            self.tool_boxes.append(f)
+        def box(key, text):
+            f = ttk.LabelFrame(parent, padding=10)
+            title = ttk.Label(f, text=text, style="TLabelframe.Label", cursor="fleur")
+            f.configure(labelwidget=title)
+            title.bind("<ButtonPress-1>", lambda e: self._on_box_title(key, e, "press"))
+            title.bind("<B1-Motion>", lambda e: self._on_box_title(key, e, "motion"))
+            title.bind("<ButtonRelease-1>", lambda e: self._on_box_title(key, e, "release"))
+            grip = ttk.Label(f, text="◢", foreground="#9AA0A6", cursor="size_nw_se", font=("Segoe UI", 8))
+            grip.place(relx=1.0, rely=1.0, anchor="se", x=-1, y=-1)
+            grip.bind("<ButtonPress-1>", lambda e: self._on_box_grip(key, e, "press"))
+            grip.bind("<B1-Motion>", lambda e: self._on_box_grip(key, e, "motion"))
+            grip.bind("<ButtonRelease-1>", lambda e: self._on_box_grip(key, e, "release"))
+            grip.bind("<Double-Button-1>", lambda e: self._on_box_grip(key, e, "reset"))
+            f.bind("<Configure>", lambda e: self._schedule_tool_reflow())
+            self.box_by_key[key] = f
+            self.box_title[key] = title
+            grips.append(grip)
             return f
 
-        def hint(parent, text):
-            ttk.Label(parent, text=text, foreground=HINT, justify="left").pack(anchor="w", pady=(8, 0))
+        grips = []
 
-        warp = self.warp_box = box("Warp threads")
+        def wrapping_label(parent, text, **opts):
+            """Text that re-wraps to the width of its box, whatever that is."""
+            lab = ttk.Label(parent, text=text, justify="left", wraplength=200, **opts)
+            lab.bind("<Configure>", lambda e: e.width > 1 and lab.cget("wraplength") != e.width
+                     and lab.configure(wraplength=e.width))
+            self._wrap_labels.add(lab)
+            return lab
+
+        def hint(parent, text):
+            wrapping_label(parent, text, foreground=HINT).pack(anchor="w", fill="x", pady=(8, 0))
+
+        warp = box("warp", "Warp threads")
         wtrow = ttk.Frame(warp)
         wtrow.pack(anchor="w", pady=(0, 8))
         ttk.Radiobutton(wtrow, text="Inkle (pick-up)", variable=self.weave_var, value="inkle",
@@ -371,59 +752,79 @@ class InkleApp(tk.Tk):
         self.redo_btn = ttk.Button(urow, text="Redo ↷", width=8, command=self.redo)
         self.redo_btn.pack(side="left", padx=(6, 0))
 
-        zoom_f = self.zoom_f = box("Preview zoom")
+        zoom_f = box("zoom", "Preview zoom")
         zrow = ttk.Frame(zoom_f)
-        zrow.pack(anchor="w")
+        zrow.pack(anchor="w", fill="x")
         ttk.Button(zrow, text="-", width=3, command=lambda: self.zoom_by(-1)).pack(side="left")
         self._zoom_last = None
         self.zoom = ttk.Scale(zrow, from_=ZOOM_MIN, to=ZOOM_MAX, orient="horizontal", length=120,
                               command=lambda _v: self._on_zoom())
         self.zoom.set(ZOOM_DEFAULT)
-        self.zoom.pack(side="left", padx=8)
+        self.zoom.pack(side="left", padx=8, fill="x", expand=True)  # stretches with the box
         ttk.Button(zrow, text="+", width=3, command=lambda: self.zoom_by(1)).pack(side="left")
         self._rotate_var = tk.BooleanVar(value=False)
         self.rotate_check = ttk.Checkbutton(zoom_f, text="Rotate 90°", variable=self._rotate_var,
                                             command=self.toggle_rotate)
         self.rotate_check.pack(anchor="w", pady=(6, 0))
 
-        tool_f = self.tool_f = box("Tool")
+        tool_f = box("tool", "Tool")
         self.mode = tk.StringVar(value="color")
         ttk.Radiobutton(tool_f, text="Color thread", variable=self.mode, value="color").pack(anchor="w", pady=2)
         ttk.Radiobutton(tool_f, text="Pick-up", variable=self.mode, value="pickup").pack(anchor="w", pady=2)
         ttk.Radiobutton(tool_f, text="Select repeat rows", variable=self.mode, value="range").pack(anchor="w", pady=2)
-        hint(tool_f, "Shift+click = pick-up. Right-click\nerases (or resets range).")
+        hint(tool_f, "Shift+click = pick-up. Right-click erases (or resets range).")
 
-        turn_f = self.turn_f = box("Turning sequence")
-        ttk.Label(turn_f, text="Each row (block) holds a per-tablet\nF/B pattern for its repeat count.",
-                 wraplength=210, justify="left").pack(anchor="w")
-        self.turn_canvas = tk.Canvas(turn_f, height=CELL, highlightthickness=0, bg=CANVAS_BG)
-        self.turn_hbar = ttk.Scrollbar(turn_f, orient="horizontal", command=self.turn_canvas.xview)
-        self.turn_canvas.configure(xscrollcommand=self.turn_hbar.set)
-        self.turn_canvas.pack(anchor="w", pady=(6, 0), fill="x")
-        self.turn_hbar.pack(anchor="w", fill="x", pady=(0, 6))
+        turn_f = self.turn_f = box("turn", "Turning sequence")
+        wrapping_label(turn_f, "Each row (block) holds a per-tablet F/B pattern for its repeat count. "
+                               "Pick 1 is the bottom row.").pack(side="top", anchor="w", fill="x")
+        # controls under the grid are packed first (from the bottom), so if the user makes the box
+        # shorter, the grid area in the middle is what shrinks -- and then scrolls
+        below = ttk.Frame(turn_f)
+        below.pack(side="bottom", fill="x")
+        area = self._turn_area = ttk.Frame(turn_f)
+        area.pack(side="top", fill="both", expand=True, pady=(6, 6))
+        area.rowconfigure(0, weight=1)
+        area.columnconfigure(0, weight=1)
+        self.turn_canvas = tk.Canvas(area, height=CELL, highlightthickness=0, bg=CANVAS_BG)
+        self.turn_hbar = ttk.Scrollbar(area, orient="horizontal", command=self.turn_canvas.xview)
+        self.turn_vbar = ttk.Scrollbar(area, orient="vertical", command=self.turn_canvas.yview)
+        self.turn_canvas.configure(xscrollcommand=self._on_turn_xscroll, yscrollcommand=self._on_turn_yscroll)
+        self.turn_canvas.grid(row=0, column=0, sticky="nsew")
+        self.turn_vbar.grid(row=0, column=1, sticky="ns")
+        self.turn_vbar.grid_remove()  # shown only when the box is too short for every block
+        self.turn_hbar.grid(row=1, column=0, sticky="ew")
+        self.turn_hbar.grid_remove()  # shown only when the box is too narrow for every tablet
         self.turn_canvas.bind("<Configure>", lambda e: self._draw_turn_blocks())
         self.turn_canvas.bind("<Button-1>", lambda e: self._on_turn_click(e, False, True))
         self.turn_canvas.bind("<B1-Motion>", lambda e: self._on_turn_click(e, False))
         self.turn_canvas.bind("<Button-3>", lambda e: self._on_turn_click(e, True, True))
         self.turn_canvas.bind("<B3-Motion>", lambda e: self._on_turn_click(e, True))
-        brow = ttk.Frame(turn_f)
+        self.turn_canvas.bind("<MouseWheel>", lambda e: self.turn_canvas.yview_scroll(-1 if e.delta > 0 else 1, "units"))
+        brow = ttk.Frame(below)
         brow.pack(anchor="w")
-        ttk.Button(brow, text="+ Add block", command=self._add_turn_block).pack(side="left")
-        ttk.Button(brow, text="Duplicate last", command=self._duplicate_turn_block).pack(side="left", padx=(6, 0))
-        ttk.Label(turn_f, text="Selected block:", foreground=HINT).pack(anchor="w", pady=(8, 2))
-        bulk1 = ttk.Frame(turn_f)
+        ttk.Button(brow, text="+ Add", command=self._add_turn_block).pack(side="left")
+        self.add_rows_var = tk.StringVar(value="1")
+        ae = ttk.Entry(brow, textvariable=self.add_rows_var, width=4)
+        ae.pack(side="left", padx=(6, 4))
+        ae.bind("<Return>", lambda _: self._add_turn_block())
+        ttk.Label(brow, text="rows").pack(side="left")
+        ttk.Button(below, text="Duplicate last", command=self._duplicate_turn_block).pack(anchor="w", pady=(6, 0))
+        ttk.Label(below, text="Selected block:", foreground=HINT).pack(anchor="w", pady=(8, 2))
+        bulk1 = ttk.Frame(below)
         bulk1.pack(anchor="w")
         ttk.Button(bulk1, text="All F", width=8, command=lambda: self._bulk_turn_block("f")).pack(side="left")
         ttk.Button(bulk1, text="All B", width=8, command=lambda: self._bulk_turn_block("b")
                   ).pack(side="left", padx=(4, 0))
-        bulk2 = ttk.Frame(turn_f)
+        bulk2 = ttk.Frame(below)
         bulk2.pack(anchor="w", pady=(4, 0))
         ttk.Button(bulk2, text="Evens → B", width=8, command=lambda: self._bulk_turn_block("evens")
                   ).pack(side="left")
         ttk.Button(bulk2, text="Odds → B", width=8, command=lambda: self._bulk_turn_block("odds")
                   ).pack(side="left", padx=(4, 0))
-        hint(turn_f, "Click a tablet to toggle F/B, drag\nfor a range. Right-click (or drag)\nsets idle -- the card doesn't turn.\nShift+click flips S↔Z there (marked\nwith a pink corner). Click × to\ndelete a block, the repeat count\nto change it (right-click -1).")
-        trow2 = ttk.Frame(turn_f)
+        hint(below, "Click a tablet to toggle F/B, drag for a range. Right-click (or drag) sets idle -- "
+                    "the card doesn't turn. Shift+click flips S↔Z there (marked with a pink corner). "
+                    "Click × to delete a block, the repeat count to change it (right-click -1).")
+        trow2 = ttk.Frame(below)
         trow2.pack(anchor="w", pady=(8, 0))
         ttk.Label(trow2, text="Trace tablet #:").pack(side="left")
         self.trace_var = tk.StringVar(value="1")
@@ -431,27 +832,30 @@ class InkleApp(tk.Tk):
         te.pack(side="left", padx=(4, 4))
         te.bind("<Return>", lambda _: self._open_trace_from_entry())
         ttk.Button(trow2, text="Go", width=4, command=self._open_trace_from_entry).pack(side="left")
-        hint(turn_f, "Or click a tablet's number in the\nheader row above to trace it.")
+        hint(below, "Or click a tablet's number in the number row below the blocks.")
 
-        preset_f = self.preset_f = box("Preset colors")
-        pw = SWATCH_COLS * (SWATCH + SWATCH_GAP)
-        self.pal = tk.Canvas(preset_f, width=pw, height=1, highlightthickness=0, bg=self.cget("bg"))
-        self.pal.pack(anchor="w")
+        preset_f = box("preset", "Preset colors")
+        # the swatches re-wrap to the box's width: a wider box gives more columns and fewer rows
+        self._pal_cols = SWATCH_COLS
+        self.pal = tk.Canvas(preset_f, width=SWATCH_COLS * (SWATCH + SWATCH_GAP), height=1, highlightthickness=0,
+                             bg=self.cget("bg"))
+        self.pal.pack(anchor="w", fill="x")
+        self.pal.bind("<Configure>", self._on_palette_resize)
         self.pal.bind("<Button-1>", lambda e: self._on_palette(e, False))
         self.pal.bind("<Button-3>", lambda e: self._on_palette(e, True))
         self._build_palette()
         ttk.Button(preset_f, text="Add current color", command=self.add_preset).pack(anchor="w", pady=(8, 0))
         hint(preset_f, "Right-click a swatch to replace it.")
 
-        color_f = self.color_f = box("Custom color")
+        color_f = box("color", "Custom color")
         self.sliders = {}
         self.slider_labels = {}
         for name in "RGB":
             r = ttk.Frame(color_f)
-            r.pack(anchor="w", pady=1)
+            r.pack(anchor="w", fill="x", pady=1)
             ttk.Label(r, text=name, width=2).pack(side="left")
             s = ttk.Scale(r, from_=0, to=255, orient="horizontal", length=130, command=lambda _v: self.on_slider())
-            s.pack(side="left", padx=4)
+            s.pack(side="left", padx=4, fill="x", expand=True)  # stretches with the box
             lab = ttk.Label(r, width=4, anchor="e")
             lab.pack(side="left")
             self.sliders[name] = s
@@ -463,7 +867,7 @@ class InkleApp(tk.Tk):
         self.hex_label = ttk.Label(cur, text="")
         self.hex_label.pack(side="left", padx=10)
 
-        repeat_f = self.repeat_f = box("Repeat preview")
+        repeat_f = box("repeat", "Repeat preview")
         rngrow = ttk.Frame(repeat_f)
         rngrow.pack(anchor="w")
         ttk.Label(rngrow, text="Rows").pack(side="left")
@@ -488,33 +892,51 @@ class InkleApp(tk.Tk):
         ttk.Button(rrow, text="Open", command=self.open_repeat_preview).pack(side="left")
         hint(repeat_f, "Dashed box in preview = selected rows.")
 
-        self._tool_cols = 1
-        self._arrange_tools(1)
+        # drop marker shown while a box is dragged by its title
+        self._drop_mark = tk.Frame(parent, bg="#0067C0", height=3)
+        for grip in grips:
+            grip.lift()  # above box contents created after it, which may now reach the corner
+
+    def _on_turn_xscroll(self, first, last):
+        """Show the turning grid's sideways scrollbar only when not every tablet fits."""
+        if float(first) <= 0 and float(last) >= 1:
+            self.turn_hbar.grid_remove()
+        else:
+            self.turn_hbar.grid()
+        self.turn_hbar.set(first, last)
+
+    def _on_turn_yscroll(self, first, last):
+        """Show the turning grid's vertical scrollbar only when not every block row fits."""
+        if float(first) <= 0 and float(last) >= 1:
+            self.turn_vbar.grid_remove()
+        else:
+            self.turn_vbar.grid()
+        self.turn_vbar.set(first, last)
+        self._turn_from_bottom = max(0, round((len(self.turn_blocks) + 1) * CELL * (1 - float(last))))
+
+    def _turn_scroll_to_bottom(self):
+        self._turn_from_bottom = 0
+        self._draw_turn_blocks()
 
     def grid_height(self):
-        rows = len(TABLET_HOLES) + 1 if self.weave_var.get() == "tablet" else 2
-        return PAD * 2 + rows * CELL
+        if self.weave_var.get() == "tablet":
+            return PAD * 2 + TABLET_NUM_H + (len(TABLET_HOLES) + 1) * CELL
+        return PAD * 2 + 2 * CELL
 
     def _on_weave_type_change(self, reset=True):
         """Switch the tool boxes, grid, and preview between Inkle pick-up and Tablet card weaving."""
         tablet = self.weave_var.get() == "tablet"
-        self.warp_box.configure(text="Tablets" if tablet else "Warp threads")
-        self.tool_f.grid_forget()
-        self.repeat_f.grid_forget()
-        self.turn_f.grid_forget()
-        self.tool_boxes = [self.warp_box, self.zoom_f, self.preset_f, self.color_f]
+        self.box_title["warp"].configure(text="Tablets" if tablet else "Warp threads")
         if tablet:
-            self.tool_boxes.append(self.turn_f)
             self._rotate_var.set(False)
             self.rotated = False
             self.rotate_check.state(["disabled"])
         else:
-            self.tool_boxes += [self.tool_f, self.repeat_f]
             self.rotate_check.state(["!disabled"])
         self._layout_preview_scrollbars()
         self.grid_canvas.configure(height=self.grid_height())
-        self._tool_cols = None
-        self._on_tools_configure()
+        self._reflow_tools(force=True)  # shows the boxes for this type of weaving, hides the rest
+        self._turn_scroll_to_bottom()  # bottom-up: start with block 1 in view
         if reset:
             self.threads, self.pickups = [], set()
             self.tablet_colors, self.tablet_sz, self.turn_blocks = [], [], []
@@ -526,12 +948,14 @@ class InkleApp(tk.Tk):
             self.refresh()
 
     def _default_turn_blocks(self, n):
-        return [{"pattern": ["F"] * n, "repeats": 4, "flips": [False] * n},
-                {"pattern": ["B"] * n, "repeats": 4, "flips": [False] * n}]
+        """Classic 4F/4B, one row per pick like a printed draft."""
+        return [{"pattern": [d] * n, "repeats": 1, "flips": [False] * n} for d in "FFFFBBBB"]
 
     def _draw_turn_blocks(self):
-        """Redraw the turning-sequence editor: a header of tablet numbers, then one row per block
-        (repeat-count + delete control on the left, that block's per-tablet F/B/idle cells after)."""
+        """Redraw the turning-sequence editor bottom-up, the way drafts are read: the first block is
+        the bottom row and later blocks stack above it, with a row of tablet numbers underneath.
+        Each block row has its repeat-count + delete control on the left, then its per-tablet
+        F/B/idle cells."""
         c = self.turn_canvas
         c.delete("all")
         n = len(self.tablet_colors)
@@ -543,15 +967,24 @@ class InkleApp(tk.Tk):
             return
         content_w = TURN_LABEL_W + n * TURN_CELL_W
         c.configure(scrollregion=(0, 0, content_w, rows * CELL))
+        # bottom-up: if the grid is taller than the space for it, keep the same distance from the
+        # bottom (block 1) in view when the box is resized or blocks are added on top. Tk on its
+        # own would keep the top fixed and slide block 1 out of view.
+        total = rows * CELL
+        top = max(0, total - max(c.winfo_height(), 1) - self._turn_from_bottom)
+        c.yview_moveto(top / total)
         for i in range(n):
             x = TURN_LABEL_W + (i + 0.5) * TURN_CELL_W
-            c.create_text(x, CELL / 2, text=str(i + 1), font=("Segoe UI", 8))
+            c.create_text(x, len(blocks) * CELL + CELL / 2, text=str(i + 1), font=("Segoe UI", 8))
         fills = {"F": "#C9A227", "B": "#5B6B8C", "I": CANVAS_BG}
         for bi, b in enumerate(blocks):
-            y0 = (bi + 1) * CELL
+            y0 = (len(blocks) - 1 - bi) * CELL
             bg = "#E7EEF8" if bi == self._active_turn_block else CANVAS_BG
             c.create_rectangle(0, y0, content_w, y0 + CELL, fill=bg, outline="")
-            c.create_text(14, y0 + CELL / 2, text="×", font=("Segoe UI", 10, "bold"), fill="#A33333")
+            c.create_text(TURN_NUM_W - 4, y0 + CELL / 2, text=str(bi + 1), anchor="e", font=("Segoe UI", 8),
+                          fill=HINT)  # row number, counting up from 1 at the bottom
+            c.create_text(TURN_NUM_W + TURN_DEL_W / 2, y0 + CELL / 2, text="×", font=("Segoe UI", 10, "bold"),
+                          fill="#A33333")
             c.create_text(TURN_LABEL_W - 16, y0 + CELL / 2, text=f"{b['repeats']}×", font=("Segoe UI", 9))
             flips = b.get("flips", [False] * n)
             for i, state in enumerate(b["pattern"]):
@@ -570,18 +1003,19 @@ class InkleApp(tk.Tk):
             return
         if press:
             self._stroke_saved = False
-        x, y = self.turn_canvas.canvasx(event.x), event.y
-        row = int(y // CELL)
-        if row == 0:  # header row: click a tablet's number to trace it
+        x, y = self.turn_canvas.canvasx(event.x), self.turn_canvas.canvasy(event.y)
+        row = int(y // CELL)  # counted from the top; blocks are drawn bottom-up
+        nb = len(self.turn_blocks)
+        if row == nb:  # number row under the blocks: click a tablet's number to trace it
             if press and x >= TURN_LABEL_W:
                 n = len(self.tablet_colors)
                 tablet = int((x - TURN_LABEL_W) // TURN_CELL_W)
                 if 0 <= tablet < n:
                     self._open_tablet_trace(tablet)
             return
-        block_idx = row - 1
-        if not 0 <= block_idx < len(self.turn_blocks):
+        if not 0 <= row < nb:
             return
+        block_idx = nb - 1 - row
         if x < TURN_LABEL_W:
             if press:
                 self._on_turn_label_click(block_idx, x, erase)
@@ -619,7 +1053,9 @@ class InkleApp(tk.Tk):
             self.redraw()
 
     def _on_turn_label_click(self, block_idx, x, erase):
-        if x < 24:  # delete glyph
+        if x < TURN_NUM_W:  # the row number itself does nothing
+            return
+        if x < TURN_NUM_W + TURN_DEL_W:  # delete glyph
             if len(self.turn_blocks) > 1 and not erase:
                 self._checkpoint()
                 del self.turn_blocks[block_idx]
@@ -635,11 +1071,20 @@ class InkleApp(tk.Tk):
         self.redraw()
 
     def _add_turn_block(self):
+        """Add the number of rows in the "+ Add ... rows" box on top: all forward, 1x each (one undo step)."""
         n = len(self.tablet_colors)
         if not n:
             return
+        try:
+            count = int(self.add_rows_var.get())
+            if not 1 <= count <= 200:
+                raise ValueError
+        except ValueError:
+            messagebox.showerror("Invalid input", "Enter a whole number of rows to add, between 1 and 200.")
+            return
         self._push_undo()
-        self.turn_blocks.append({"pattern": ["F"] * n, "repeats": 4, "flips": [False] * n})
+        for _ in range(count):
+            self.turn_blocks.append({"pattern": ["F"] * n, "repeats": 1, "flips": [False] * n})
         self._active_turn_block = len(self.turn_blocks) - 1
         self._draw_turn_blocks()
         self.redraw()
@@ -735,20 +1180,28 @@ class InkleApp(tk.Tk):
 
     def _build_palette(self):
         step = SWATCH + SWATCH_GAP
-        rows = -(-len(self.presets) // SWATCH_COLS)
+        cols = self._pal_cols
+        rows = -(-len(self.presets) // cols)
         self.pal.delete("all")
         self.pal.configure(height=rows * step)
         for i, c in enumerate(self.presets):
-            x, y = (i % SWATCH_COLS) * step + 2, (i // SWATCH_COLS) * step + 2
+            x, y = (i % cols) * step + 2, (i // cols) * step + 2
             selected = c.upper() == self.color.upper()
             if selected:
                 self.pal.create_rectangle(x - 2, y - 2, x + SWATCH + 1, y + SWATCH + 1, outline="#0067C0", width=2)
             self.pal.create_rectangle(x + 2, y + 2, x + SWATCH - 3, y + SWATCH - 3, fill=c, outline="#9AA0A6")
 
+    def _on_palette_resize(self, event):
+        """Re-wrap the swatches to the palette's width: more columns (and fewer rows) when wider."""
+        cols = max(1, event.width // (SWATCH + SWATCH_GAP))
+        if cols != self._pal_cols:
+            self._pal_cols = cols
+            self._build_palette()
+
     def _on_palette(self, event, replace):
         step = SWATCH + SWATCH_GAP
-        i = int(event.y // step) * SWATCH_COLS + int(event.x // step)
-        if event.x < 0 or event.y < 0 or event.x // step >= SWATCH_COLS or not 0 <= i < len(self.presets):
+        i = int(event.y // step) * self._pal_cols + int(event.x // step)
+        if event.x < 0 or event.y < 0 or event.x // step >= self._pal_cols or not 0 <= i < len(self.presets):
             return
         if replace:
             self.replace_preset(i)
@@ -767,6 +1220,7 @@ class InkleApp(tk.Tk):
 
     def _presets_changed(self):
         self._build_palette()
+        self._apply_box_size("preset")  # a user-sized box still has to fit a longer palette
         try:
             os.makedirs(os.path.dirname(PRESETS_FILE), exist_ok=True)
             with open(PRESETS_FILE, "w") as f:
@@ -798,6 +1252,9 @@ class InkleApp(tk.Tk):
         em.add_command(label="Undo", accelerator="Ctrl+Z", command=self.undo)
         em.add_command(label="Redo", accelerator="Ctrl+Y", command=self.redo)
         m.add_cascade(label="Edit", menu=em)
+        vm = tk.Menu(m, tearoff=0)
+        vm.add_command(label="Reset tool layout", command=self.reset_tool_layout)
+        m.add_cascade(label="View", menu=vm)
         self.config(menu=m)
         self.bind("<Control-o>", lambda e: self.open_file())
         self.bind("<Control-s>", lambda e: self.save_file())
@@ -951,6 +1408,7 @@ class InkleApp(tk.Tk):
             self._active_turn_block = 0
             self.count_var.set(str(len(colors)))
             self._draw_turn_blocks()
+            self._turn_scroll_to_bottom()  # bottom-up: start with block 1 in view
         else:
             self.threads = threads
             self.pickups = {(i, r) for i, r in pickups if 0 <= i < len(threads)}
@@ -1008,7 +1466,9 @@ class InkleApp(tk.Tk):
             self.threads = [None] * n
             self.pickups = set()
         self.refresh()
-        if not tablet:
+        if tablet:
+            self._turn_scroll_to_bottom()  # bottom-up: start with block 1 in view
+        else:
             self.select_full_range()
 
     def zoom_by(self, d):
@@ -1038,15 +1498,16 @@ class InkleApp(tk.Tk):
             c.create_text(w / 2, h / 2, text="Enter the number of tablets and click Generate",
                           fill="#777777", font=("Segoe UI", 12))
             return
-        x0, y0 = PAD + LABEL_W, PAD
-        avail_h = max(h - y0 - PAD, 1)
+        x0, y_bottom = PAD + LABEL_W, h - PAD  # pick 1 at the bottom, woven upward
+        avail_h = max(h - 2 * PAD, 1)
         cell_w = round(self.zoom.get()) * 2
         cell_h = round(cell_w * 1.8)
         rows = max(4, avail_h // cell_h)
         self._visible_rows = rows
         extent = x0 + n * cell_w + PAD
         c.configure(scrollregion=(0, 0, max(extent, w), h))
-        draw_tablet_band(c, self.tablet_colors, self.tablet_sz, self.turn_blocks, x0, y0, cell_w, cell_h, rows)
+        draw_tablet_band(c, self.tablet_colors, self.tablet_sz, self.turn_blocks, x0, y_bottom, cell_w, cell_h,
+                         rows)
 
     def _redraw_inkle(self):
         c = self.canvas
@@ -1126,26 +1587,31 @@ class InkleApp(tk.Tk):
                                     fill=fill, outline=LINE)
 
     def _draw_tablet_grid(self):
-        """Four hole rows (A-D, paintable) plus an S/Z row (click to flip a tablet's threading)."""
+        """Tablet numbers (left to right), four hole rows (A-D, paintable), and an S/Z row (click to
+        flip a tablet's threading)."""
         gc = self.grid_canvas
         n = len(self.tablet_colors)
         if not n:
             return
         gcell = self.grid_cell_width(n)
         x0 = PAD + LABEL_W
+        step = tablet_label_step(gcell, n)
+        for i in range(step - 1, n, step):
+            gc.create_text(x0 + (i + 0.5) * gcell, PAD + TABLET_NUM_H / 2, text=str(i + 1), font=("Segoe UI", 8))
+        top = PAD + TABLET_NUM_H
         for r, lab in enumerate(TABLET_HOLES):
-            gc.create_text(PAD + LABEL_W / 2, PAD + r * CELL + CELL / 2, text=lab, font=("Segoe UI", 11, "bold"))
+            gc.create_text(PAD + LABEL_W / 2, top + r * CELL + CELL / 2, text=lab, font=("Segoe UI", 11, "bold"))
             for i in range(n):
                 fill = self.tablet_colors[i][r] or EMPTY
-                gc.create_rectangle(x0 + i * gcell, PAD + r * CELL, x0 + (i + 1) * gcell, PAD + (r + 1) * CELL,
+                gc.create_rectangle(x0 + i * gcell, top + r * CELL, x0 + (i + 1) * gcell, top + (r + 1) * CELL,
                                     fill=fill, outline=LINE)
         sz_row = len(TABLET_HOLES)
-        gc.create_text(PAD + LABEL_W / 2, PAD + sz_row * CELL + CELL / 2, text="S/Z", font=("Segoe UI", 9, "bold"))
+        gc.create_text(PAD + LABEL_W / 2, top + sz_row * CELL + CELL / 2, text="S/Z", font=("Segoe UI", 9, "bold"))
         for i in range(n):
             is_z = self.tablet_sz[i]
-            gc.create_rectangle(x0 + i * gcell, PAD + sz_row * CELL, x0 + (i + 1) * gcell, PAD + (sz_row + 1) * CELL,
+            gc.create_rectangle(x0 + i * gcell, top + sz_row * CELL, x0 + (i + 1) * gcell, top + (sz_row + 1) * CELL,
                                 fill=CANVAS_BG, outline=LINE)
-            gc.create_text(x0 + (i + 0.5) * gcell, PAD + (sz_row + 0.5) * CELL, text=("Z" if is_z else "S"),
+            gc.create_text(x0 + (i + 0.5) * gcell, top + (sz_row + 0.5) * CELL, text=("Z" if is_z else "S"),
                           font=("Segoe UI", 9, "bold"), fill=("#6a7fb0" if is_z else "#b0756a"))
 
     def refresh(self):
@@ -1258,12 +1724,12 @@ class InkleApp(tk.Tk):
             self._stroke_saved = False
         n = len(self.tablet_colors)
         x, y = self.grid_canvas.canvasx(event.x), event.y
-        x0 = PAD + LABEL_W
-        if x < x0 or y < PAD:
+        x0, top = PAD + LABEL_W, PAD + TABLET_NUM_H
+        if x < x0 or y < top:
             return
         gcell = self.grid_cell_width(n)
         i = int((x - x0) // gcell)
-        row = int((y - PAD) // CELL)
+        row = int((y - top) // CELL)
         if not 0 <= i < n or not 0 <= row <= len(TABLET_HOLES):
             return
         if row == len(TABLET_HOLES):  # S/Z row: a left-click press flips the tablet's threading
